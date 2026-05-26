@@ -15,7 +15,7 @@ import { DIMENSION_LABELS } from "@/lib/types";
 interface Props {
   job: AuditJob;
   scores: PageScore[];
-  summary: NonNullable<ReturnType<typeof import("@/lib/scoring").computeAuditSummary>>;
+  summary: AuditSummary;
 }
 
 export default function AuditResults({ job, scores, summary }: Props) {
