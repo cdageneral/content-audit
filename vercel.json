@@ -1,0 +1,14 @@
+{
+  "functions": {
+    "app/api/webhook/qstash/route.ts": {
+      "maxDuration": 300
+    },
+    "app/api/audit/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/audit/[jobId]/progress/route.ts": {
+      "maxDuration": 120
+    }
+  },
+  "crons": []
+}
