@@ -1,5 +1,7 @@
 // GET /api/audit/[jobId]/progress — Server-Sent Events stream
 // Clients connect here to get real-time job progress updates
+export const maxDuration = 120;
+
 import { NextRequest } from "next/server";
 import { getJob } from "@/lib/db/client";
 

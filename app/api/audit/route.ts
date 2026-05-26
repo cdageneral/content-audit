@@ -1,4 +1,6 @@
 // POST /api/audit — Create a new audit job
+export const maxDuration = 60;
+
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createJob, updateJobStatus } from "@/lib/db/client";

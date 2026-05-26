@@ -1,6 +1,7 @@
 // POST /api/webhook/qstash
 // Receives async batch jobs from QStash: crawl_batch and score_batch
-// maxDuration: 300 (set in vercel.json)
+export const maxDuration = 300;
+
 import { NextRequest, NextResponse } from "next/server";
 import { verifyQStashSignature } from "@/lib/queue/qstash";
 import { extractPage } from "@/lib/crawler/extract";
