@@ -6,6 +6,8 @@ import { createJob, updateJobStatus } from "@/lib/db/client";
 import { discoverUrls } from "@/lib/crawler/discover";
 import { enqueueCrawlBatches } from "@/lib/queue/qstash";
 import { neon } from "@neondatabase/serverless";
+import { DEFAULT_WEIGHTS } from "@/lib/types";
+import type { DimensionScores } from "@/lib/types";
 
 type Params = { params: { id: string } };
 
@@ -28,7 +30,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       url: project.websiteUrl,
       scopePrefix: project.scopePrefix ?? undefined,
       maxPages: project.maxPages,
-      weights: project.weights,
+      weights: { ...DEFAULT_WEIGHTS, ...project.weights } as DimensionScores,
     });
 
     // Link job to project
@@ -66,7 +68,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           url: competitor.url,
           scopePrefix: competitor.scopePrefix ?? undefined,
           maxPages: Math.min(project.maxPages, 50), // limit competitor crawl depth
-          weights: project.weights,
+          weights: { ...DEFAULT_WEIGHTS, ...project.weights } as DimensionScores,
         });
 
         await sql`

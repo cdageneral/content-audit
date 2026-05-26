@@ -125,11 +125,12 @@ export default function CreateProjectForm() {
             className="flex-1 px-4 py-3 text-xs font-medium transition-colors"
             style={{
               color: s === step ? "var(--text-1)" : i < stepIdx ? "var(--indigo)" : "var(--text-3)",
+              borderTop: "none",
+              borderLeft: "none",
+              borderRight: "none",
               borderBottom: s === step ? "2px solid var(--indigo)" : "2px solid transparent",
               marginBottom: "-1px",
               background: "none",
-              border: "none",
-              borderBottom: s === step ? "2px solid var(--indigo)" : "2px solid transparent",
               cursor: i < stepIdx ? "pointer" : "default",
             }}
           >
