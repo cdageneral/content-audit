@@ -94,7 +94,7 @@ async function handleCrawlBatch(
       await enqueueScoreBatch({
         jobId,
         pageIds: chunk.map((p) => p.id),
-        weights: job.weights,
+        weights: { ...DEFAULT_WEIGHTS, ...job.weights } as DimensionScores,
       });
     }
   }
