@@ -276,6 +276,14 @@ body {
 }
 
 /* ── Nav ───────────────────────────────────────────────────── */
+.nav-link {
+  color: var(--text-2);
+  text-decoration: none;
+}
+.nav-link:hover {
+  color: var(--text-1);
+}
+
 .app-nav {
   background: rgba(7,11,20,0.85);
   backdrop-filter: blur(16px);

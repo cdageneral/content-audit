@@ -38,10 +38,7 @@ export default function RootLayout({
 
             {/* Right side nav */}
             <div className="flex items-center gap-1">
-              <Link href="/" className="px-3 py-1.5 rounded-lg text-sm transition-colors"
-                style={{ color: "var(--text-2)" }}
-                onMouseEnter={e => (e.currentTarget.style.color = "var(--text-1)")}
-                onMouseLeave={e => (e.currentTarget.style.color = "var(--text-2)")}>
+              <Link href="/" className="nav-link px-3 py-1.5 rounded-lg text-sm transition-colors">
                 Dashboard
               </Link>
               <Link href="/projects/new" className="btn-primary ml-2 text-sm px-4 py-1.5">
