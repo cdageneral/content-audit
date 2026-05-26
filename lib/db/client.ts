@@ -6,7 +6,6 @@ import type {
   PageScore,
   DimensionScores,
   Recommendation,
-  DEFAULT_WEIGHTS,
 } from "@/lib/types";
 import { DEFAULT_WEIGHTS as DW } from "@/lib/types";
 

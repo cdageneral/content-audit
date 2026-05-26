@@ -10,7 +10,6 @@ import type {
   DimensionRationale,
   Recommendation,
   ScoreDimension,
-  DEFAULT_WEIGHTS,
 } from "@/lib/types";
 import { DEFAULT_WEIGHTS as DW } from "@/lib/types";
 import { SCORING_SYSTEM_PROMPT, SCORE_TOOL_DEFINITION } from "./prompt";
