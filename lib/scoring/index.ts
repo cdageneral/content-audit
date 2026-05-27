@@ -16,7 +16,7 @@ import { SCORING_SYSTEM_PROMPT, SCORE_TOOL_DEFINITION } from "./prompt";
 
 const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-const SCORING_MODEL = process.env.SCORING_MODEL ?? "claude-sonnet-4-5";
+const SCORING_MODEL = process.env.SCORING_MODEL ?? "claude-haiku-4-5-20251001";
 
 // ── Score a single page ───────────────────────────────────────
 
@@ -60,16 +60,18 @@ export async function scoreBatch(
     try {
       const score = await scorePage(pages[i], pageIds[i], weights);
       results.push(score);
-      onProgress?.(pageIds[i]);
     } catch (err) {
       console.error(`[scoring] Error scoring ${pages[i].url}:`, err);
       // Push a zero-score placeholder so we don't block the whole batch
       results.push(zeroScore(pages[i], pageIds[i]));
+    } finally {
+      // Always advance the counter — failed pages must not stall the pipeline
+      onProgress?.(pageIds[i]);
     }
 
-    // Respect Claude API rate limits: ~50 req/min on Sonnet
+    // Brief pause between API calls (Haiku has generous rate limits)
     if (i < pages.length - 1) {
-      await sleep(1200);
+      await sleep(300);
     }
   }
 

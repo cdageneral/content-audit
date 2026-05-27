@@ -111,11 +111,18 @@ async function handleCrawlBatch(
     return;
   }
 
-  console.log(`[crawl] Job ${jobId}: ${updatedJob.crawledPages}/${updatedJob.totalPages} pages crawled. Dispatching scoring...`);
-
   const pages = await getPagesByJob(jobId);
-  const SCORE_BATCH_SIZE = 10;
 
+  // If no pages were successfully crawled, mark done immediately — nothing to score
+  if (pages.length === 0) {
+    await updateJobStatus(jobId, "done");
+    console.log(`[crawl] Job ${jobId}: 0 pages in DB after crawl — marking done.`);
+    return;
+  }
+
+  console.log(`[crawl] Job ${jobId}: ${pages.length} pages in DB. Dispatching scoring...`);
+
+  const SCORE_BATCH_SIZE = 10;
   for (let i = 0; i < pages.length; i += SCORE_BATCH_SIZE) {
     const chunk = pages.slice(i, i + SCORE_BATCH_SIZE);
     await enqueueScoreBatch({
@@ -125,7 +132,7 @@ async function handleCrawlBatch(
     });
   }
 
-  console.log(`[crawl] Job ${jobId}: ${Math.ceil(pages.length / SCORE_BATCH_SIZE)} score batches dispatched.`);
+  console.log(`[crawl] Job ${jobId}: ${Math.ceil(pages.length / SCORE_BATCH_SIZE)} score batches dispatched for ${pages.length} pages.`);
 }
 
 // ── Score batch handler ───────────────────────────────────────
@@ -147,7 +154,10 @@ async function handleScoreBatch(
     .map((id) => pageMap.get(id))
     .filter(Boolean) as typeof allPages;
 
-  if (pagesToScore.length === 0) return;
+  if (pagesToScore.length === 0) {
+    console.warn(`[score] Job ${jobId}: no matching pages for batch — checking completion.`);
+    // Don't return early; fall through to the done check below
+  }
 
   const crawledPages = pagesToScore.map((p) => ({
     jobId,
@@ -178,10 +188,11 @@ async function handleScoreBatch(
   }
 
   // Check if all pages are scored → mark job done
+  // Use allPages.length (actual DB rows) NOT crawledPages counter, which counts failed fetches too
   const updatedJob = await getJob(jobId);
-  if (updatedJob && updatedJob.scoredPages >= updatedJob.crawledPages && updatedJob.crawledPages > 0) {
+  if (updatedJob && allPages.length > 0 && updatedJob.scoredPages >= allPages.length) {
     await updateJobStatus(jobId, "done");
-    console.log(`[score] Job ${jobId} complete! ${updatedJob.scoredPages} pages scored.`);
+    console.log(`[score] Job ${jobId} complete! ${updatedJob.scoredPages}/${allPages.length} pages scored.`);
 
     const sql = neon(process.env.DATABASE_URL!);
     const jobRows = await sql`

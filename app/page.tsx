@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { listProjects } from "@/lib/db/projects";
 import type { Project } from "@/lib/db/projects";
+import DeleteProjectButton from "@/components/DeleteProjectButton";
 
 export const revalidate = 0;
 
@@ -97,67 +98,76 @@ function ProjectCard({ project: p, delay }: { project: Project; delay: number })
   const hasScore = score != null;
 
   return (
-    <Link href={`/projects/${p.id}`}
-      className={`card card-interactive block anim-fade-up stagger-${Math.min(delay + 1, 6)} overflow-hidden`}>
-      {/* Accent bar */}
-      <div className={`accent-bar ${hasScore ? `accent-${grade}` : ""}`}
-        style={!hasScore ? { background: "var(--bg-3)" } : undefined} />
+    <div className={`relative group anim-fade-up stagger-${Math.min(delay + 1, 6)}`}>
+      <Link href={`/projects/${p.id}`}
+        className="card card-interactive block overflow-hidden">
+        {/* Accent bar */}
+        <div className={`accent-bar ${hasScore ? `accent-${grade}` : ""}`}
+          style={!hasScore ? { background: "var(--bg-3)" } : undefined} />
 
-      <div className="p-5">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-base truncate mb-0.5" style={{ color: "var(--text-1)" }}>
-              {p.clientName}
-            </h3>
-            <p className="text-xs truncate font-mono" style={{ color: "var(--text-3)" }}>
-              {p.websiteUrl.replace(/^https?:\/\//, "")}
-              {p.scopePrefix && <span style={{ color: "var(--indigo)" }}>{p.scopePrefix}</span>}
-            </p>
+        <div className="p-5">
+          {/* Header */}
+          <div className="flex items-start justify-between mb-4">
+            <div className="flex-1 min-w-0">
+              <h3 className="font-semibold text-base truncate mb-0.5" style={{ color: "var(--text-1)" }}>
+                {p.clientName}
+              </h3>
+              <p className="text-xs truncate font-mono" style={{ color: "var(--text-3)" }}>
+                {p.websiteUrl.replace(/^https?:\/\//, "")}
+                {p.scopePrefix && <span style={{ color: "var(--indigo)" }}>{p.scopePrefix}</span>}
+              </p>
+            </div>
+            {/* Spacer for trash button area */}
+            <div className="w-8 flex-shrink-0" />
+            {hasScore && (
+              <span className={`grade grade-${grade} ml-1 flex-shrink-0`}>{grade}</span>
+            )}
           </div>
+
+          {/* Score + trend */}
+          <div className="flex items-end gap-3 mb-4">
+            <div>
+              <div className="text-4xl font-bold leading-none" style={{
+                color: hasScore ? scoreColor(score!) : "var(--text-3)"
+              }}>
+                {hasScore ? score : "—"}
+              </div>
+              <div className="text-xs mt-1" style={{ color: "var(--text-3)" }}>LLM readiness score</div>
+            </div>
+            {delta != null && (
+              <div className={`flex items-center gap-1 text-sm font-medium pb-1 ${delta > 0 ? "trend-up" : delta < 0 ? "trend-down" : "trend-flat"}`}>
+                {delta > 0 ? "↑" : delta < 0 ? "↓" : "→"}
+                {Math.abs(delta)} pts
+              </div>
+            )}
+          </div>
+
+          {/* Mini score bar */}
           {hasScore && (
-            <span className={`grade grade-${grade} ml-3 flex-shrink-0`}>{grade}</span>
-          )}
-        </div>
-
-        {/* Score + trend */}
-        <div className="flex items-end gap-3 mb-4">
-          <div>
-            <div className="text-4xl font-bold leading-none" style={{
-              color: hasScore ? scoreColor(score!) : "var(--text-3)"
-            }}>
-              {hasScore ? score : "—"}
-            </div>
-            <div className="text-xs mt-1" style={{ color: "var(--text-3)" }}>LLM readiness score</div>
-          </div>
-          {delta != null && (
-            <div className={`flex items-center gap-1 text-sm font-medium pb-1 ${delta > 0 ? "trend-up" : delta < 0 ? "trend-down" : "trend-flat"}`}>
-              {delta > 0 ? "↑" : delta < 0 ? "↓" : "→"}
-              {Math.abs(delta)} pts
+            <div className="progress-track mb-4">
+              <div className="progress-fill" style={{
+                width: `${score}%`,
+                background: scoreBarColor(score!),
+              }} />
             </div>
           )}
-        </div>
 
-        {/* Mini score bar */}
-        {hasScore && (
-          <div className="progress-track mb-4">
-            <div className="progress-fill" style={{
-              width: `${score}%`,
-              background: scoreBarColor(score!),
-            }} />
+          {/* Footer row */}
+          <div className="flex items-center justify-between text-xs" style={{ color: "var(--text-3)" }}>
+            <span>
+              {p.runCount > 0 ? `${p.runCount} run${p.runCount !== 1 ? "s" : ""}` : "Not yet audited"}
+              {p.lastAuditedAt && ` · ${timeAgo(p.lastAuditedAt)}`}
+            </span>
+            <span style={{ color: "var(--indigo)" }}>View →</span>
           </div>
-        )}
-
-        {/* Footer row */}
-        <div className="flex items-center justify-between text-xs" style={{ color: "var(--text-3)" }}>
-          <span>
-            {p.runCount > 0 ? `${p.runCount} run${p.runCount !== 1 ? "s" : ""}` : "Not yet audited"}
-            {p.lastAuditedAt && ` · ${timeAgo(p.lastAuditedAt)}`}
-          </span>
-          <span style={{ color: "var(--indigo)" }}>View →</span>
         </div>
+      </Link>
+
+      {/* Trash button — absolutely positioned top-right, visible on hover */}
+      <div className="absolute top-3 right-3 z-10">
+        <DeleteProjectButton projectId={p.id} />
       </div>
-    </Link>
+    </div>
   );
 }
 
