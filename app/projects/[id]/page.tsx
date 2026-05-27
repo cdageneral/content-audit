@@ -42,12 +42,24 @@ export default async function ProjectHubPage({
   const hasResults = clientScores.length > 0;
 
   // In-progress jobs (for status banner)
+  // Only jobs created in the last 2 hours to avoid showing stale stuck jobs
   const activeJobs = await sql`
     SELECT id, competitor_id, status, crawled_pages, total_pages, scored_pages
     FROM audit_jobs
-    WHERE project_id = ${params.id} AND status NOT IN ('done', 'failed')
+    WHERE project_id = ${params.id}
+      AND status NOT IN ('done', 'failed')
+      AND created_at > NOW() - INTERVAL '2 hours'
     ORDER BY created_at DESC LIMIT 5
   `.catch(() => []);
+
+  // Auto-expire jobs older than 2 hours that are still stuck — mark them failed
+  await sql`
+    UPDATE audit_jobs
+    SET status = 'failed', error_message = 'Timed out — job exceeded 2 hour limit'
+    WHERE project_id = ${params.id}
+      AND status NOT IN ('done', 'failed')
+      AND created_at <= NOW() - INTERVAL '2 hours'
+  `.catch(() => null);
 
   const isRunning = activeJobs.length > 0;
 
@@ -89,7 +101,7 @@ export default async function ProjectHubPage({
 
       {/* ── Active run banner (live progress) ─────────────── */}
       {isRunning && (
-        <LiveAuditBanner initialJobs={activeJobs as any} />
+        <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />
       )}
 
       {/* ── Score trend chart ──────────────────────────────── */}

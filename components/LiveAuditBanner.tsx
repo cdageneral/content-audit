@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 
 interface ActiveJob {
@@ -20,8 +20,14 @@ interface JobProgressState {
   scoredPages: number;
 }
 
+interface ProgressSnapshot {
+  timestamp: number;
+  pct: number;
+}
+
 interface Props {
   initialJobs: ActiveJob[];
+  projectId: string;
 }
 
 const STAGE_PRIORITY = ["scoring", "crawling", "discovering", "queued"] as const;
@@ -40,8 +46,42 @@ function getStageLabel(jobs: JobProgressState[]): string {
   return "Processing…";
 }
 
-export default function LiveAuditBanner({ initialJobs }: Props) {
+// Rolling window: keep last N snapshots, need at least 2 with different pct values
+const ETA_WINDOW = 8;
+
+function computeEta(history: ProgressSnapshot[], currentPct: number): string | null {
+  if (history.length < 2) return null;
+  if (currentPct <= 0) return null;
+  if (currentPct >= 100) return null;
+
+  // Use oldest and newest snapshots in window for rate
+  const oldest = history[0];
+  const newest = history[history.length - 1];
+
+  const elapsedMs = newest.timestamp - oldest.timestamp;
+  const pctGained = newest.pct - oldest.pct;
+
+  if (elapsedMs < 3000 || pctGained <= 0) return null; // not enough data yet
+
+  const msPerPct = elapsedMs / pctGained;
+  const remainingPct = 100 - currentPct;
+  const remainingMs = msPerPct * remainingPct;
+  const remainingSec = Math.round(remainingMs / 1000);
+
+  if (remainingSec <= 0) return null;
+  if (remainingSec < 60) return `~${remainingSec}s remaining`;
+
+  const mins = Math.round(remainingSec / 60);
+  if (mins === 1) return "~1 min remaining";
+  if (mins < 60) return `~${mins} min remaining`;
+
+  const hrs = Math.round(mins / 60);
+  return `~${hrs}h remaining`;
+}
+
+export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
   const router = useRouter();
+  const [cancelling, setCancelling] = useState(false);
 
   const [jobMap, setJobMap] = useState<Map<string, JobProgressState>>(
     () =>
@@ -59,9 +99,11 @@ export default function LiveAuditBanner({ initialJobs }: Props) {
       )
   );
 
-  const [doneRefreshing, setDoneRefreshing] = useState(false);
+  // ETA tracking: rolling window of (timestamp, overallPct) snapshots
+  const [progressHistory, setProgressHistory] = useState<ProgressSnapshot[]>([
+    { timestamp: Date.now(), pct: 0 },
+  ]);
 
-  // Stable updater so the effect closure doesn't capture stale state
   const updateJob = useCallback((data: JobProgressState) => {
     setJobMap((prev) => {
       const next = new Map(prev);
@@ -86,9 +128,7 @@ export default function LiveAuditBanner({ initialJobs }: Props) {
           if (data.status === "done" || data.status === "failed") {
             es.close();
             completedCount++;
-            // When all jobs finish, refresh the page so results appear
             if (completedCount >= total) {
-              setDoneRefreshing(true);
               setTimeout(() => router.refresh(), 1200);
             }
           }
@@ -102,31 +142,56 @@ export default function LiveAuditBanner({ initialJobs }: Props) {
     });
 
     return () => sources.forEach((s) => s.close());
-  }, []); // connect once on mount
+  }, []);
 
+  // Compute aggregate totals
   const jobList = Array.from(jobMap.values());
   const activeJobs = jobList.filter(
     (j) => j.status !== "done" && j.status !== "failed"
   );
 
-  // All jobs completed — hide banner (refresh will reload the page)
+  const totalPages = jobList.reduce((s, j) => s + (j.totalPages || 0), 0);
+  const crawledPages = jobList.reduce((s, j) => s + j.crawledPages, 0);
+  const scoredPages = jobList.reduce((s, j) => s + j.scoredPages, 0);
+
+  const crawlPct = totalPages > 0 ? Math.round((crawledPages / totalPages) * 100) : 0;
+  const scorePct = totalPages > 0 ? Math.round((scoredPages / totalPages) * 100) : 0;
+  const overallPct = Math.round(crawlPct * 0.4 + scorePct * 0.6);
+
+  // Append to ETA history whenever overallPct changes
+  useEffect(() => {
+    if (overallPct <= 0) return;
+    setProgressHistory((prev) => {
+      const last = prev[prev.length - 1];
+      // Only append if pct actually changed
+      if (last && last.pct === overallPct) return prev;
+      const next = [...prev, { timestamp: Date.now(), pct: overallPct }];
+      return next.slice(-ETA_WINDOW);
+    });
+  }, [overallPct]);
+
+  const eta = computeEta(progressHistory, overallPct);
+  const stageLabel = getStageLabel(activeJobs);
+
+  async function handleCancel() {
+    setCancelling(true);
+    try {
+      await fetch(`/api/projects/${projectId}/cancel`, { method: "POST" });
+      router.refresh();
+    } finally {
+      setCancelling(false);
+    }
+  }
+
+  // All jobs completed
   if (activeJobs.length === 0 && jobList.length > 0) {
     return (
       <div
         className="anim-slide-r rounded-xl p-4 flex items-center gap-3"
-        style={{
-          background: "rgba(52,211,153,0.08)",
-          border: "1px solid rgba(52,211,153,0.25)",
-        }}
+        style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)" }}
       >
-        <svg
-          className="h-4 w-4 flex-shrink-0"
-          style={{ color: "#34d399" }}
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-        >
+        <svg className="h-4 w-4 flex-shrink-0" style={{ color: "#34d399" }} fill="none"
+          viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
         </svg>
         <p className="text-sm font-medium" style={{ color: "var(--text-1)" }}>
@@ -136,28 +201,10 @@ export default function LiveAuditBanner({ initialJobs }: Props) {
     );
   }
 
-  // Aggregate totals across all jobs
-  const totalPages = jobList.reduce((s, j) => s + (j.totalPages || 0), 0);
-  const crawledPages = jobList.reduce((s, j) => s + j.crawledPages, 0);
-  const scoredPages = jobList.reduce((s, j) => s + j.scoredPages, 0);
-
-  const crawlPct =
-    totalPages > 0 ? Math.round((crawledPages / totalPages) * 100) : 0;
-  const scorePct =
-    totalPages > 0 ? Math.round((scoredPages / totalPages) * 100) : 0;
-
-  // Overall progress: weight crawl 40%, score 60%
-  const overallPct = Math.round(crawlPct * 0.4 + scorePct * 0.6);
-
-  const stageLabel = getStageLabel(activeJobs);
-
   return (
     <div
       className="anim-slide-r rounded-xl p-4 space-y-4"
-      style={{
-        background: "rgba(99,102,241,0.08)",
-        border: "1px solid rgba(99,102,241,0.2)",
-      }}
+      style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)" }}
     >
       {/* Header row */}
       <div className="flex items-center gap-3">
@@ -171,19 +218,39 @@ export default function LiveAuditBanner({ initialJobs }: Props) {
             {stageLabel}
           </p>
         </div>
+
+        {/* ETA */}
+        {eta && (
+          <span className="text-xs flex-shrink-0" style={{ color: "var(--text-3)" }}>
+            {eta}
+          </span>
+        )}
+
         {/* Overall % badge */}
         <div
-          className="text-xs font-mono tabular-nums px-2 py-0.5 rounded-full"
-          style={{
-            background: "rgba(99,102,241,0.15)",
-            color: "var(--indigo)",
-          }}
+          className="text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0"
+          style={{ background: "rgba(99,102,241,0.15)", color: "var(--indigo)" }}
         >
           {overallPct}%
         </div>
+
+        {/* Cancel */}
+        <button
+          onClick={handleCancel}
+          disabled={cancelling}
+          className="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
+          style={{
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.1)",
+            color: "var(--text-3)",
+            cursor: cancelling ? "not-allowed" : "pointer",
+          }}
+        >
+          {cancelling ? "Cancelling…" : "Cancel"}
+        </button>
       </div>
 
-      {/* Overall progress bar */}
+      {/* Overall bar */}
       <ProgressBar
         label="Overall"
         pct={overallPct}
@@ -215,49 +282,26 @@ export default function LiveAuditBanner({ initialJobs }: Props) {
 }
 
 function ProgressBar({
-  label,
-  pct,
-  current,
-  total,
-  color,
-  thick = false,
+  label, pct, current, total, color, thick = false,
 }: {
-  label: string;
-  pct: number;
-  current: number | null;
-  total: number | null;
-  color: string;
-  thick?: boolean;
+  label: string; pct: number; current: number | null; total: number | null;
+  color: string; thick?: boolean;
 }) {
   return (
     <div className="space-y-1">
       <div className="flex justify-between items-baseline gap-2">
-        <span className="text-xs truncate" style={{ color: "var(--text-3)" }}>
-          {label}
-        </span>
-        <span
-          className="text-xs font-mono tabular-nums flex-shrink-0"
-          style={{ color: "var(--text-2)" }}
-        >
-          {current !== null && total !== null
-            ? `${current} / ${total || "…"}`
-            : `${pct}%`}
+        <span className="text-xs truncate" style={{ color: "var(--text-3)" }}>{label}</span>
+        <span className="text-xs font-mono tabular-nums flex-shrink-0" style={{ color: "var(--text-2)" }}>
+          {current !== null && total !== null ? `${current} / ${total || "…"}` : `${pct}%`}
         </span>
       </div>
-      <div
-        className={`rounded-full overflow-hidden ${thick ? "h-2" : "h-1.5"}`}
-        style={{ background: "rgba(255,255,255,0.06)" }}
-      >
-        <div
-          className="h-full rounded-full transition-all duration-700 ease-out"
-          style={{ width: `${pct}%`, background: color }}
-        />
+      <div className={`rounded-full overflow-hidden ${thick ? "h-2" : "h-1.5"}`}
+        style={{ background: "rgba(255,255,255,0.06)" }}>
+        <div className="h-full rounded-full transition-all duration-700 ease-out"
+          style={{ width: `${pct}%`, background: color }} />
       </div>
       {current !== null && total !== null && (
-        <div
-          className="text-right text-xs font-mono tabular-nums"
-          style={{ color: "var(--text-3)" }}
-        >
+        <div className="text-right text-xs font-mono tabular-nums" style={{ color: "var(--text-3)" }}>
           {pct}%
         </div>
       )}
