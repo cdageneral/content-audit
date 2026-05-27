@@ -15,11 +15,14 @@ import {
   getJob,
 } from "@/lib/db/client";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
+import { neon } from "@neondatabase/serverless";
 import type { CrawlBatchMessage, ScoreBatchMessage, DimensionScores } from "@/lib/types";
 import { DEFAULT_WEIGHTS } from "@/lib/types";
 
+// Threshold: if ≥85% of pages crawled, don't wait for the final batch index
+const CRAWL_COMPLETION_THRESHOLD = 0.85;
+
 export async function POST(req: NextRequest) {
-  // Verify the request is from QStash
   const { valid, body } = await verifyQStashSignature(req);
 
   if (!valid) {
@@ -34,6 +37,8 @@ export async function POST(req: NextRequest) {
       await handleCrawlBatch(msg as unknown as CrawlBatchMessage & { type: string });
     } else if (msg.type === "score_batch") {
       await handleScoreBatch(msg as unknown as ScoreBatchMessage & { type: string });
+    } else if (msg.type === "test") {
+      console.log("[qstash] Test message received — OK");
     } else {
       console.warn(`[qstash] Unknown message type: ${msg.type}`);
     }
@@ -41,7 +46,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[qstash] Handler error:", err);
-    // Return 200 to prevent QStash from retrying fatally broken jobs
     return NextResponse.json({ error: String(err) }, { status: 200 });
   }
 }
@@ -53,25 +57,19 @@ async function handleCrawlBatch(
 ): Promise<void> {
   const { jobId, urls, auth, batchIndex, totalBatches } = msg;
 
-  console.log(
-    `[crawl] Job ${jobId}: batch ${batchIndex + 1}/${totalBatches} (${urls.length} URLs)`
-  );
+  console.log(`[crawl] Job ${jobId}: batch ${batchIndex + 1}/${totalBatches} (${urls.length} URLs)`);
 
   const job = await getJob(jobId);
-  if (!job || job.status === "failed") return;
-
-  const pageIds: string[] = [];
+  if (!job || job.status === "failed" || job.status === "scoring" || job.status === "done") return;
 
   for (const url of urls) {
     try {
       const page = await extractPage(jobId, url, {
-        usePlaywright: false, // Start with fetch; upgrade to Playwright if needed
+        usePlaywright: false,
         auth: auth ?? undefined,
       });
-
       if (page) {
-        const pageId = await upsertPage(page);
-        pageIds.push(pageId);
+        await upsertPage(page);
         await incrementJobProgress(jobId, "crawled_pages");
         console.log(`[crawl] ✓ ${url}`);
       }
@@ -80,24 +78,50 @@ async function handleCrawlBatch(
     }
   }
 
-  // On the final batch, kick off scoring
-  if (batchIndex === totalBatches - 1) {
-    console.log(`[crawl] All batches complete for job ${jobId}. Starting scoring...`);
-    await updateJobStatus(jobId, "scoring");
+  // Re-fetch job to get latest crawled count after this batch
+  const updatedJob = await getJob(jobId);
+  if (!updatedJob || updatedJob.status !== "crawling") return;
 
-    // Fetch all crawled page IDs and dispatch scoring
-    const pages = await getPagesByJob(jobId);
-    const SCORE_BATCH_SIZE = 10;
+  const isLastBatch = batchIndex === totalBatches - 1;
+  const crawlRatio = updatedJob.totalPages > 0
+    ? updatedJob.crawledPages / updatedJob.totalPages
+    : 0;
+  const enoughCrawled = crawlRatio >= CRAWL_COMPLETION_THRESHOLD;
 
-    for (let i = 0; i < pages.length; i += SCORE_BATCH_SIZE) {
-      const chunk = pages.slice(i, i + SCORE_BATCH_SIZE);
-      await enqueueScoreBatch({
-        jobId,
-        pageIds: chunk.map((p) => p.id),
-        weights: { ...DEFAULT_WEIGHTS, ...job.weights } as DimensionScores,
-      });
-    }
+  if (!isLastBatch && !enoughCrawled) {
+    console.log(`[crawl] Batch ${batchIndex + 1}/${totalBatches} done. ${updatedJob.crawledPages}/${updatedJob.totalPages} crawled (${Math.round(crawlRatio * 100)}%) — waiting for more batches.`);
+    return;
   }
+
+  // Atomically claim the scoring transition — prevents duplicate scoring if
+  // multiple batches finish around the same time
+  const sql = neon(process.env.DATABASE_URL!);
+  const claimed = await sql`
+    UPDATE audit_jobs SET status = 'scoring'
+    WHERE id = ${jobId} AND status = 'crawling'
+    RETURNING id
+  `;
+
+  if (claimed.length === 0) {
+    console.log(`[crawl] Job ${jobId} scoring already claimed by another batch — skipping.`);
+    return;
+  }
+
+  console.log(`[crawl] Job ${jobId}: ${updatedJob.crawledPages}/${updatedJob.totalPages} pages crawled. Dispatching scoring...`);
+
+  const pages = await getPagesByJob(jobId);
+  const SCORE_BATCH_SIZE = 10;
+
+  for (let i = 0; i < pages.length; i += SCORE_BATCH_SIZE) {
+    const chunk = pages.slice(i, i + SCORE_BATCH_SIZE);
+    await enqueueScoreBatch({
+      jobId,
+      pageIds: chunk.map((p) => p.id),
+      weights: { ...DEFAULT_WEIGHTS, ...updatedJob.weights } as DimensionScores,
+    });
+  }
+
+  console.log(`[crawl] Job ${jobId}: ${Math.ceil(pages.length / SCORE_BATCH_SIZE)} score batches dispatched.`);
 }
 
 // ── Score batch handler ───────────────────────────────────────
@@ -112,7 +136,6 @@ async function handleScoreBatch(
   const job = await getJob(jobId);
   if (!job || job.status === "failed") return;
 
-  // Load page content from DB
   const allPages = await getPagesByJob(jobId);
   const pageMap = new Map(allPages.map((p) => [p.id, p]));
 
@@ -122,7 +145,6 @@ async function handleScoreBatch(
 
   if (pagesToScore.length === 0) return;
 
-  // Build CrawledPage-compatible objects for the scorer
   const crawledPages = pagesToScore.map((p) => ({
     jobId,
     url: p.url,
@@ -133,10 +155,7 @@ async function handleScoreBatch(
     headings: [],
     internalLinks: [],
     externalLinks: [],
-    metadata: {
-      hasStructuredData: false,
-      ...(p.metadata as object),
-    },
+    metadata: { hasStructuredData: false, ...(p.metadata as object) },
     httpStatus: 200,
     crawledAt: new Date(),
   }));
@@ -145,24 +164,21 @@ async function handleScoreBatch(
     crawledPages,
     pagesToScore.map((p) => p.id),
     weights as DimensionScores,
-    async (pageId) => {
+    async (_pageId) => {
       await incrementJobProgress(jobId, "scored_pages");
     }
   );
 
-  // Persist scores
   for (const score of pageScoreList) {
     await upsertScore(score);
   }
 
   // Check if all pages are scored → mark job done
   const updatedJob = await getJob(jobId);
-  if (updatedJob && updatedJob.scoredPages >= updatedJob.totalPages) {
+  if (updatedJob && updatedJob.scoredPages >= updatedJob.crawledPages && updatedJob.crawledPages > 0) {
     await updateJobStatus(jobId, "done");
-    console.log(`[score] Job ${jobId} complete!`);
+    console.log(`[score] Job ${jobId} complete! ${updatedJob.scoredPages} pages scored.`);
 
-    // Refresh project / competitor caches if this job is linked to a project
-    const neon = (await import("@neondatabase/serverless")).neon;
     const sql = neon(process.env.DATABASE_URL!);
     const jobRows = await sql`
       SELECT project_id, competitor_id FROM audit_jobs WHERE id = ${jobId}

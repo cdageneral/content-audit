@@ -31,7 +31,6 @@ interface Props {
 }
 
 const STAGE_PRIORITY = ["scoring", "crawling", "discovering", "queued"] as const;
-
 const STAGE_LABELS: Record<string, string> = {
   scoring: "Scoring pages with Claude…",
   crawling: "Crawling and extracting content…",
@@ -46,37 +45,29 @@ function getStageLabel(jobs: JobProgressState[]): string {
   return "Processing…";
 }
 
-// Rolling window: keep last N snapshots, need at least 2 with different pct values
 const ETA_WINDOW = 8;
 
-function computeEta(history: ProgressSnapshot[], currentPct: number): string | null {
-  if (history.length < 2) return null;
-  if (currentPct <= 0) return null;
-  if (currentPct >= 100) return null;
-
-  // Use oldest and newest snapshots in window for rate
+// Returns remaining ms based on rolling rate, or null if not enough data
+function computeRemainingMs(history: ProgressSnapshot[], currentPct: number): number | null {
+  if (history.length < 2 || currentPct <= 0 || currentPct >= 100) return null;
   const oldest = history[0];
   const newest = history[history.length - 1];
-
   const elapsedMs = newest.timestamp - oldest.timestamp;
   const pctGained = newest.pct - oldest.pct;
-
-  if (elapsedMs < 3000 || pctGained <= 0) return null; // not enough data yet
-
+  if (elapsedMs < 3000 || pctGained <= 0) return null;
   const msPerPct = elapsedMs / pctGained;
-  const remainingPct = 100 - currentPct;
-  const remainingMs = msPerPct * remainingPct;
-  const remainingSec = Math.round(remainingMs / 1000);
+  return msPerPct * (100 - currentPct);
+}
 
-  if (remainingSec <= 0) return null;
-  if (remainingSec < 60) return `~${remainingSec}s remaining`;
-
-  const mins = Math.round(remainingSec / 60);
-  if (mins === 1) return "~1 min remaining";
-  if (mins < 60) return `~${mins} min remaining`;
-
-  const hrs = Math.round(mins / 60);
-  return `~${hrs}h remaining`;
+function formatCountdown(ms: number): string {
+  const totalSec = Math.max(0, Math.round(ms / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  if (mins < 60) return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
 }
 
 export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
@@ -84,93 +75,83 @@ export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
   const [cancelling, setCancelling] = useState(false);
 
   const [jobMap, setJobMap] = useState<Map<string, JobProgressState>>(
-    () =>
-      new Map(
-        initialJobs.map((j) => [
-          j.id,
-          {
-            jobId: j.id,
-            status: j.status,
-            totalPages: j.total_pages,
-            crawledPages: j.crawled_pages,
-            scoredPages: j.scored_pages,
-          },
-        ])
-      )
+    () => new Map(initialJobs.map((j) => [j.id, {
+      jobId: j.id, status: j.status,
+      totalPages: j.total_pages, crawledPages: j.crawled_pages, scoredPages: j.scored_pages,
+    }]))
   );
 
-  // ETA tracking: rolling window of (timestamp, overallPct) snapshots
   const [progressHistory, setProgressHistory] = useState<ProgressSnapshot[]>([
     { timestamp: Date.now(), pct: 0 },
   ]);
 
+  // Deadline = Date.now() + remainingMs, updated whenever rate is recalculated
+  const etaDeadlineRef = useRef<number | null>(null);
+  const [countdownMs, setCountdownMs] = useState<number | null>(null);
+
   const updateJob = useCallback((data: JobProgressState) => {
-    setJobMap((prev) => {
-      const next = new Map(prev);
-      next.set(data.jobId, data);
-      return next;
-    });
+    setJobMap((prev) => { const next = new Map(prev); next.set(data.jobId, data); return next; });
   }, []);
 
   useEffect(() => {
     const sources: EventSource[] = [];
     let completedCount = 0;
     const total = initialJobs.length;
-
     initialJobs.forEach((job) => {
       const es = new EventSource(`/api/audit/${job.id}/progress`);
-
       es.onmessage = (e) => {
         try {
           const data = JSON.parse(e.data) as JobProgressState;
           updateJob(data);
-
           if (data.status === "done" || data.status === "failed") {
             es.close();
             completedCount++;
-            if (completedCount >= total) {
-              setTimeout(() => router.refresh(), 1200);
-            }
+            if (completedCount >= total) setTimeout(() => router.refresh(), 1200);
           }
-        } catch {
-          // ignore parse errors
-        }
+        } catch {}
       };
-
       es.onerror = () => es.close();
       sources.push(es);
     });
-
     return () => sources.forEach((s) => s.close());
   }, []);
 
-  // Compute aggregate totals
-  const jobList = Array.from(jobMap.values());
-  const activeJobs = jobList.filter(
-    (j) => j.status !== "done" && j.status !== "failed"
-  );
+  // Live countdown ticker — runs every second
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (etaDeadlineRef.current === null) return;
+      const remaining = etaDeadlineRef.current - Date.now();
+      setCountdownMs(remaining > 0 ? remaining : 0);
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
 
+  // Aggregate totals
+  const jobList = Array.from(jobMap.values());
+  const activeJobs = jobList.filter((j) => j.status !== "done" && j.status !== "failed");
   const totalPages = jobList.reduce((s, j) => s + (j.totalPages || 0), 0);
   const crawledPages = jobList.reduce((s, j) => s + j.crawledPages, 0);
   const scoredPages = jobList.reduce((s, j) => s + j.scoredPages, 0);
+  const crawlPct = totalPages > 0 ? Math.min(100, Math.round((crawledPages / totalPages) * 100)) : 0;
+  const scorePct = totalPages > 0 ? Math.min(100, Math.round((scoredPages / totalPages) * 100)) : 0;
+  const overallPct = Math.min(100, Math.round(crawlPct * 0.4 + scorePct * 0.6));
 
-  const crawlPct = totalPages > 0 ? Math.round((crawledPages / totalPages) * 100) : 0;
-  const scorePct = totalPages > 0 ? Math.round((scoredPages / totalPages) * 100) : 0;
-  const overallPct = Math.round(crawlPct * 0.4 + scorePct * 0.6);
-
-  // Append to ETA history whenever overallPct changes
+  // Update ETA history and deadline whenever overallPct changes
   useEffect(() => {
     if (overallPct <= 0) return;
     setProgressHistory((prev) => {
       const last = prev[prev.length - 1];
-      // Only append if pct actually changed
       if (last && last.pct === overallPct) return prev;
-      const next = [...prev, { timestamp: Date.now(), pct: overallPct }];
-      return next.slice(-ETA_WINDOW);
+      const next = [...prev, { timestamp: Date.now(), pct: overallPct }].slice(-ETA_WINDOW);
+      const remainingMs = computeRemainingMs(next, overallPct);
+      if (remainingMs !== null) {
+        etaDeadlineRef.current = Date.now() + remainingMs;
+        setCountdownMs(remainingMs);
+      }
+      return next;
     });
   }, [overallPct]);
 
-  const eta = computeEta(progressHistory, overallPct);
   const stageLabel = getStageLabel(activeJobs);
 
   async function handleCancel() {
@@ -183,13 +164,11 @@ export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
     }
   }
 
-  // All jobs completed
+  // All done
   if (activeJobs.length === 0 && jobList.length > 0) {
     return (
-      <div
-        className="anim-slide-r rounded-xl p-4 flex items-center gap-3"
-        style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)" }}
-      >
+      <div className="anim-slide-r rounded-xl p-4 flex items-center gap-3"
+        style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)" }}>
         <svg className="h-4 w-4 flex-shrink-0" style={{ color: "#34d399" }} fill="none"
           viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
@@ -202,88 +181,77 @@ export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
   }
 
   return (
-    <div
-      className="anim-slide-r rounded-xl p-4 space-y-4"
-      style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)" }}
-    >
+    <div className="anim-slide-r rounded-xl p-4 space-y-4"
+      style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)" }}>
+
       {/* Header row */}
       <div className="flex items-center gap-3">
         <div className="spinner flex-shrink-0" />
+
+        {/* Stage info */}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium" style={{ color: "var(--text-1)" }}>
-            Audit in progress —{" "}
-            {activeJobs.length} job{activeJobs.length !== 1 ? "s" : ""} running
+            Audit in progress — {activeJobs.length} job{activeJobs.length !== 1 ? "s" : ""} running
           </p>
-          <p className="text-xs" style={{ color: "var(--text-2)" }}>
-            {stageLabel}
-          </p>
+          <p className="text-xs" style={{ color: "var(--text-2)" }}>{stageLabel}</p>
         </div>
 
-        {/* ETA */}
-        {eta && (
-          <span className="text-xs flex-shrink-0" style={{ color: "var(--text-3)" }}>
-            {eta}
-          </span>
-        )}
+        {/* ETA countdown + % block */}
+        <div className="flex items-center gap-3 flex-shrink-0">
+          {/* Countdown */}
+          {countdownMs !== null && countdownMs > 0 && (
+            <div className="text-right">
+              <div className="text-xs" style={{ color: "var(--text-3)" }}>est. remaining</div>
+              <div className="text-sm font-mono font-medium tabular-nums"
+                style={{ color: "var(--text-2)", letterSpacing: "0.02em" }}>
+                {formatCountdown(countdownMs)}
+              </div>
+            </div>
+          )}
 
-        {/* Overall % badge */}
-        <div
-          className="text-xs font-mono tabular-nums px-2 py-0.5 rounded-full flex-shrink-0"
-          style={{ background: "rgba(99,102,241,0.15)", color: "var(--indigo)" }}
-        >
-          {overallPct}%
+          {/* Large % badge */}
+          <div className="flex items-center justify-center rounded-full flex-shrink-0"
+            style={{
+              width: 56, height: 56,
+              background: "rgba(99,102,241,0.15)",
+              border: "2px solid rgba(99,102,241,0.3)",
+            }}>
+            <span className="font-bold tabular-nums"
+              style={{ fontSize: 16, color: "var(--indigo)", lineHeight: 1 }}>
+              {overallPct}%
+            </span>
+          </div>
+
+          {/* Cancel */}
+          <button onClick={handleCancel} disabled={cancelling}
+            className="text-xs px-3 py-1.5 rounded-full flex-shrink-0"
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              color: "var(--text-3)",
+              cursor: cancelling ? "not-allowed" : "pointer",
+            }}>
+            {cancelling ? "Cancelling…" : "Cancel"}
+          </button>
         </div>
-
-        {/* Cancel */}
-        <button
-          onClick={handleCancel}
-          disabled={cancelling}
-          className="text-xs px-2 py-0.5 rounded-full flex-shrink-0"
-          style={{
-            background: "rgba(255,255,255,0.05)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            color: "var(--text-3)",
-            cursor: cancelling ? "not-allowed" : "pointer",
-          }}
-        >
-          {cancelling ? "Cancelling…" : "Cancel"}
-        </button>
       </div>
 
       {/* Overall bar */}
-      <ProgressBar
-        label="Overall"
-        pct={overallPct}
-        current={null}
-        total={null}
-        color="rgba(99,102,241,0.85)"
-        thick
-      />
+      <ProgressBar label="Overall" pct={overallPct} current={null} total={null}
+        color="rgba(99,102,241,0.85)" thick />
 
       {/* Crawl + Score detail */}
       <div className="grid grid-cols-2 gap-3">
-        <ProgressBar
-          label="Pages crawled"
-          pct={crawlPct}
-          current={crawledPages}
-          total={totalPages}
-          color="rgba(139,92,246,0.8)"
-        />
-        <ProgressBar
-          label="Pages scored"
-          pct={scorePct}
-          current={scoredPages}
-          total={totalPages}
-          color="rgba(251,191,36,0.8)"
-        />
+        <ProgressBar label="Pages crawled" pct={crawlPct}
+          current={crawledPages} total={totalPages} color="rgba(139,92,246,0.8)" />
+        <ProgressBar label="Pages scored" pct={scorePct}
+          current={scoredPages} total={totalPages} color="rgba(251,191,36,0.8)" />
       </div>
     </div>
   );
 }
 
-function ProgressBar({
-  label, pct, current, total, color, thick = false,
-}: {
+function ProgressBar({ label, pct, current, total, color, thick = false }: {
   label: string; pct: number; current: number | null; total: number | null;
   color: string; thick?: boolean;
 }) {

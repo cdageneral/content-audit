@@ -15,7 +15,7 @@ export async function POST(req: NextRequest, { params }: Params) {
   try {
     const body = await req.json().catch(() => ({}));
     const runCompetitors: boolean = body.includeCompetitors ?? true;
-    const competitorIds: string[] | undefined = body.competitorIds; // run specific competitors only
+    const competitorIds: string[] | undefined = body.competitorIds;
 
     const project = await getProjectDetail(params.id);
     if (!project) {
@@ -23,6 +23,15 @@ export async function POST(req: NextRequest, { params }: Params) {
     }
 
     const sql = neon(process.env.DATABASE_URL!);
+
+    // ── Cancel any existing stuck/active jobs before starting fresh ──
+    await sql`
+      UPDATE audit_jobs
+      SET status = 'failed', error_message = 'Superseded by new run'
+      WHERE project_id = ${params.id}
+        AND status NOT IN ('done', 'failed')
+    `.catch(() => null);
+
     const jobIds: { type: "client" | "competitor"; id: string; competitorId?: string }[] = [];
 
     // ── Run audit for client site ─────────────────────────────
@@ -33,7 +42,6 @@ export async function POST(req: NextRequest, { params }: Params) {
       weights: { ...DEFAULT_WEIGHTS, ...project.weights } as DimensionScores,
     });
 
-    // Link job to project
     await sql`
       UPDATE audit_jobs SET project_id = ${project.id}, competitor_id = NULL
       WHERE id = ${clientJob.id}
@@ -67,7 +75,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         const compJob = await createJob({
           url: competitor.url,
           scopePrefix: competitor.scopePrefix ?? undefined,
-          maxPages: Math.min(project.maxPages, 50), // limit competitor crawl depth
+          maxPages: Math.min(project.maxPages, 50),
           weights: { ...DEFAULT_WEIGHTS, ...project.weights } as DimensionScores,
         });
 
