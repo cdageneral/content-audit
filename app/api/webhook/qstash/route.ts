@@ -70,11 +70,15 @@ async function handleCrawlBatch(
       });
       if (page) {
         await upsertPage(page);
-        await incrementJobProgress(jobId, "crawled_pages");
         console.log(`[crawl] ✓ ${url}`);
+      } else {
+        console.warn(`[crawl] ✗ ${url}: returned null (blocked or empty)`);
       }
     } catch (err) {
       console.error(`[crawl] ✗ ${url}:`, err);
+    } finally {
+      // Always count as attempted — blocked/timed-out pages must not stall the pipeline
+      await incrementJobProgress(jobId, "crawled_pages");
     }
   }
 
