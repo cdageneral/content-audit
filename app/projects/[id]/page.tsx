@@ -8,6 +8,7 @@ import CompetitorMatrix from "@/components/CompetitorMatrix";
 import RunButton from "@/components/RunButton";
 import AddCompetitorForm from "@/components/AddCompetitorForm";
 import AuditResults from "@/components/AuditResults";
+import LiveAuditBanner from "@/components/LiveAuditBanner";
 
 export const revalidate = 0;
 
@@ -86,20 +87,9 @@ export default async function ProjectHubPage({
         </div>
       </div>
 
-      {/* ── Active run banner ──────────────────────────────── */}
+      {/* ── Active run banner (live progress) ─────────────── */}
       {isRunning && (
-        <div className="anim-slide-r rounded-xl p-4 flex items-center gap-3"
-          style={{ background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)" }}>
-          <div className="spinner flex-shrink-0" />
-          <div>
-            <p className="text-sm font-medium" style={{ color: "var(--text-1)" }}>
-              Audit in progress — {activeJobs.length} job{activeJobs.length !== 1 ? "s" : ""} running
-            </p>
-            <p className="text-xs" style={{ color: "var(--text-2)" }}>
-              Scores will update automatically when complete. Refresh to see latest progress.
-            </p>
-          </div>
-        </div>
+        <LiveAuditBanner initialJobs={activeJobs as any} />
       )}
 
       {/* ── Score trend chart ──────────────────────────────── */}
