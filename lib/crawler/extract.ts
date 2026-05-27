@@ -64,7 +64,6 @@ async function fetchWithPlaywright(
 
   const browser = await chromium.launch({
     args: chromiumModule.default.args,
-    defaultViewport: chromiumModule.default.defaultViewport,
     executablePath: await chromiumModule.default.executablePath(),
     headless: true,
   });
