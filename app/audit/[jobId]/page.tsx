@@ -30,12 +30,12 @@ export default async function AuditPage({
       <div>
         <div className="flex items-center gap-3 mb-1">
           <StatusBadge status={job.status} />
-          <span className="text-slate-400 text-sm font-mono">{job.id}</span>
+          <span className="text-slate-500 text-sm font-mono">{job.id}</span>
         </div>
-        <h1 className="text-2xl font-bold text-white truncate">{job.url}</h1>
+        <h1 className="text-2xl font-bold text-slate-900 truncate">{job.url}</h1>
         {job.scopePrefix && (
-          <p className="text-slate-400 text-sm mt-1">
-            Scope: <code className="text-indigo-400">{job.scopePrefix}</code>
+          <p className="text-slate-500 text-sm mt-1">
+            Scope: <code className="text-indigo-600">{job.scopePrefix}</code>
           </p>
         )}
       </div>
@@ -50,9 +50,9 @@ export default async function AuditPage({
 
       {/* Failed state */}
       {job.status === "failed" && (
-        <div className="rounded-xl border border-red-800/50 bg-red-950/20 p-6">
-          <h3 className="text-red-400 font-semibold mb-2">Audit Failed</h3>
-          <p className="text-slate-400 text-sm">{job.errorMessage || "Unknown error"}</p>
+        <div className="rounded-xl border border-red-300 bg-red-50 p-6">
+          <h3 className="text-red-600 font-semibold mb-2">Audit Failed</h3>
+          <p className="text-slate-500 text-sm">{job.errorMessage || "Unknown error"}</p>
         </div>
       )}
     </div>
@@ -61,12 +61,12 @@ export default async function AuditPage({
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    queued: "bg-slate-700 text-slate-300",
-    discovering: "bg-blue-900/50 text-blue-400",
-    crawling: "bg-violet-900/50 text-violet-400",
-    scoring: "bg-amber-900/50 text-amber-400",
-    done: "bg-emerald-900/50 text-emerald-400",
-    failed: "bg-red-900/50 text-red-400",
+    queued: "bg-slate-200 text-slate-600",
+    discovering: "bg-blue-100 text-blue-600",
+    crawling: "bg-violet-100 text-violet-600",
+    scoring: "bg-amber-100 text-amber-600",
+    done: "bg-emerald-100 text-emerald-600",
+    failed: "bg-red-100 text-red-600",
   };
   return (
     <span
