@@ -19,13 +19,13 @@ export default async function DashboardPage() {
       <div className="px-6 pt-16 pb-10 max-w-6xl mx-auto">
         <div className="anim-fade-up text-center mb-12">
           <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium mb-6"
-            style={{ background: "rgba(99,102,241,0.12)", color: "#818cf8", border: "1px solid rgba(99,102,241,0.2)" }}>
+            style={{ background: "rgba(99,102,241,0.12)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.2)" }}>
             <span className="status-dot status-running" />
             Powered by Claude Sonnet
           </div>
           <h1 className="text-5xl font-bold mb-4" style={{ color: "var(--text-1)", letterSpacing: "-0.02em" }}>
             LLM Content<br />
-            <span style={{ background: "linear-gradient(135deg, #6366f1, #a78bfa)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
+            <span style={{ background: "linear-gradient(135deg, #6366f1, #7c3aed)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
               Readiness Auditor
             </span>
           </h1>
@@ -182,7 +182,7 @@ function NewProjectCard() {
           <line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>
         </svg>
       </div>
-      <p className="font-medium text-sm" style={{ color: "#818cf8" }}>New Project</p>
+      <p className="font-medium text-sm" style={{ color: "#4f46e5" }}>New Project</p>
       <p className="text-xs mt-1" style={{ color: "var(--text-3)" }}>Add a client + competitors</p>
     </Link>
   );
@@ -207,11 +207,11 @@ function EmptyState() {
 }
 
 function scoreColor(s: number) {
-  if (s >= 80) return "#34d399";
-  if (s >= 65) return "#60a5fa";
-  if (s >= 50) return "#fbbf24";
-  if (s >= 35) return "#fb923c";
-  return "#f87171";
+  if (s >= 80) return "#059669";
+  if (s >= 65) return "#2563eb";
+  if (s >= 50) return "#d97706";
+  if (s >= 35) return "#ea580c";
+  return "#dc2626";
 }
 
 function scoreBarColor(s: number) {

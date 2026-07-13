@@ -4,23 +4,23 @@
 
 /* ── Design tokens ─────────────────────────────────────────── */
 :root {
-  --bg-0:       #070b14;
-  --bg-1:       #0d1220;
-  --bg-2:       #111827;
-  --bg-3:       #1a2234;
-  --bg-4:       #212d42;
-  --border:     rgba(255,255,255,0.07);
-  --border-hi:  rgba(255,255,255,0.13);
+  --bg-0:       #f7f8fb;
+  --bg-1:       #ffffff;
+  --bg-2:       #f1f4f9;
+  --bg-3:       #e4e9f2;
+  --bg-4:       #d3dae6;
+  --border:     rgba(15,23,42,0.08);
+  --border-hi:  rgba(15,23,42,0.16);
   --indigo:     #6366f1;
   --indigo-dim: #4f46e5;
   --purple:     #8b5cf6;
-  --text-1:     #f0f4ff;
-  --text-2:     #94a3b8;
-  --text-3:     #4b5568;
-  --green:      #10b981;
-  --amber:      #f59e0b;
-  --red:        #ef4444;
-  --blue:       #3b82f6;
+  --text-1:     #0f172a;
+  --text-2:     #475569;
+  --text-3:     #8a94a6;
+  --green:      #059669;
+  --amber:      #d97706;
+  --red:        #dc2626;
+  --blue:       #2563eb;
 }
 
 /* ── Base ──────────────────────────────────────────────────── */
@@ -91,7 +91,7 @@ body {
 }
 .card-interactive:hover {
   transform: translateY(-2px);
-  box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+  box-shadow: 0 8px 32px rgba(15,23,42,0.10);
 }
 
 /* ── Project card accent bars ──────────────────────────────── */
@@ -103,7 +103,7 @@ body {
 .accent-A { background: var(--green); }
 .accent-B { background: var(--blue); }
 .accent-C { background: var(--amber); }
-.accent-D { background: #f97316; }
+.accent-D { background: #ea580c; }
 .accent-F { background: var(--red); }
 
 /* ── Grade badges ──────────────────────────────────────────── */
@@ -117,22 +117,22 @@ body {
   padding: 2px 8px;
   letter-spacing: 0.03em;
 }
-.grade-A { background: rgba(16,185,129,0.15); color: #34d399; border: 1px solid rgba(16,185,129,0.25); }
-.grade-B { background: rgba(59,130,246,0.15); color: #60a5fa; border: 1px solid rgba(59,130,246,0.25); }
-.grade-C { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.25); }
-.grade-D { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.25); }
-.grade-F { background: rgba(239,68,68,0.15);  color: #f87171; border: 1px solid rgba(239,68,68,0.25); }
+.grade-A { background: rgba(16,185,129,0.15); color: #059669; border: 1px solid rgba(16,185,129,0.25); }
+.grade-B { background: rgba(59,130,246,0.15); color: #2563eb; border: 1px solid rgba(59,130,246,0.25); }
+.grade-C { background: rgba(245,158,11,0.15); color: #d97706; border: 1px solid rgba(245,158,11,0.25); }
+.grade-D { background: rgba(249,115,22,0.15); color: #ea580c; border: 1px solid rgba(249,115,22,0.25); }
+.grade-F { background: rgba(239,68,68,0.15);  color: #dc2626; border: 1px solid rgba(239,68,68,0.25); }
 
 /* ── Score colors ──────────────────────────────────────────── */
-.score-great { color: #34d399; }
-.score-good  { color: #60a5fa; }
-.score-ok    { color: #fbbf24; }
-.score-poor  { color: #fb923c; }
-.score-bad   { color: #f87171; }
+.score-great { color: #059669; }
+.score-good  { color: #2563eb; }
+.score-ok    { color: #d97706; }
+.score-poor  { color: #ea580c; }
+.score-bad   { color: #dc2626; }
 
 /* ── Trend indicators ──────────────────────────────────────── */
-.trend-up   { color: #34d399; animation: trend-up 0.4s ease both; }
-.trend-down { color: #f87171; animation: trend-up 0.4s ease both; }
+.trend-up   { color: #059669; animation: trend-up 0.4s ease both; }
+.trend-down { color: #dc2626; animation: trend-up 0.4s ease both; }
 .trend-flat { color: var(--text-3); }
 
 /* ── Progress bars ─────────────────────────────────────────── */
@@ -184,11 +184,11 @@ body {
 }
 
 /* ── Competitor color palette (CSS vars) ───────────────────── */
-.comp-0 { --cc: #f87171; }   /* red */
-.comp-1 { --cc: #fb923c; }   /* orange */
-.comp-2 { --cc: #facc15; }   /* yellow */
-.comp-3 { --cc: #4ade80; }   /* green */
-.comp-4 { --cc: #38bdf8; }   /* sky */
+.comp-0 { --cc: #dc2626; }   /* red */
+.comp-1 { --cc: #ea580c; }   /* orange */
+.comp-2 { --cc: #ca8a04; }   /* yellow */
+.comp-3 { --cc: #16a34a; }   /* green */
+.comp-4 { --cc: #0284c7; }   /* sky */
 
 /* ── Form inputs (dark) ────────────────────────────────────── */
 .dark-input {
@@ -250,7 +250,7 @@ body {
 }
 .data-table td {
   padding: 11px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.04);
+  border-bottom: 1px solid rgba(15,23,42,0.05);
   color: var(--text-2);
 }
 .data-table tbody tr {
@@ -269,7 +269,7 @@ body {
 .matrix-winner::after {
   content: "✦";
   font-size: 8px;
-  color: #34d399;
+  color: #059669;
   position: absolute;
   top: 4px;
   right: 6px;
@@ -285,7 +285,7 @@ body {
 }
 
 .app-nav {
-  background: rgba(7,11,20,0.85);
+  background: rgba(255,255,255,0.85);
   backdrop-filter: blur(16px);
   border-bottom: 1px solid var(--border);
   position: sticky;
@@ -307,4 +307,4 @@ body {
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg-0); }
 ::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #334155; }
+::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
