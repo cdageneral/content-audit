@@ -37,11 +37,11 @@ function avg(scores: PageScore[], dim: ScoreDimension | "overall"): number | nul
 }
 
 function scoreColor(s: number) {
-  if (s >= 80) return "#34d399";
-  if (s >= 65) return "#60a5fa";
-  if (s >= 50) return "#fbbf24";
-  if (s >= 35) return "#fb923c";
-  return "#f87171";
+  if (s >= 80) return "#059669";
+  if (s >= 65) return "#2563eb";
+  if (s >= 50) return "#d97706";
+  if (s >= 35) return "#ea580c";
+  return "#dc2626";
 }
 
 export default function CompetitorMatrix({

@@ -38,7 +38,7 @@ export default function TrendChart({ history, competitors, competitorColors }: P
     return (
       <div style={{
         background: "var(--bg-2, #111827)",
-        border: "1px solid rgba(255,255,255,0.1)",
+        border: "1px solid rgba(15,23,42,0.12)",
         borderRadius: 10,
         padding: "10px 14px",
         fontSize: 12,
@@ -47,7 +47,7 @@ export default function TrendChart({ history, competitors, competitorColors }: P
         {payload.map((p: any) => (
           <div key={p.dataKey} style={{ display: "flex", justifyContent: "space-between", gap: 16, marginBottom: 3 }}>
             <span style={{ color: p.color }}>{p.name}</span>
-            <span style={{ color: "#f0f4ff", fontWeight: 600 }}>{p.value}</span>
+            <span style={{ color: "#0f172a", fontWeight: 600 }}>{p.value}</span>
           </div>
         ))}
       </div>
@@ -57,11 +57,11 @@ export default function TrendChart({ history, competitors, competitorColors }: P
   return (
     <ResponsiveContainer width="100%" height={220}>
       <LineChart data={data} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
-        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+        <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.06)" />
         <XAxis
           dataKey="date"
           tick={{ fill: "#4b5568", fontSize: 11 }}
-          axisLine={{ stroke: "rgba(255,255,255,0.06)" }}
+          axisLine={{ stroke: "rgba(15,23,42,0.06)" }}
           tickLine={false}
         />
         <YAxis

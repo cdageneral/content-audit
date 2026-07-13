@@ -100,14 +100,14 @@ export default function AddCompetitorForm({ projectId }: Props) {
 
       {error && (
         <div className="rounded-lg px-3 py-2 text-xs"
-          style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+          style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#dc2626" }}>
           {error}
         </div>
       )}
 
       {success && (
         <div className="rounded-lg px-3 py-2 text-xs anim-fade-in"
-          style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.2)", color: "#34d399" }}>
+          style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.2)", color: "#059669" }}>
           Competitor added — run an audit to score them.
         </div>
       )}

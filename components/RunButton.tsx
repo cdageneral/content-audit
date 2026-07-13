@@ -67,7 +67,7 @@ export default function RunButton({ projectId, hasCompetitors }: Props) {
       )}
 
       {error && (
-        <span className="text-xs" style={{ color: "#f87171" }}>{error}</span>
+        <span className="text-xs" style={{ color: "#dc2626" }}>{error}</span>
       )}
     </div>
   );

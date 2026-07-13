@@ -41,8 +41,8 @@ export default function DeleteProjectButton({ projectId }: { projectId: string }
           onClick={handleCancel}
           className="text-xs px-2 py-1 rounded-md"
           style={{
-            background: "rgba(255,255,255,0.06)",
-            border: "1px solid rgba(255,255,255,0.1)",
+            background: "rgba(15,23,42,0.06)",
+            border: "1px solid rgba(15,23,42,0.12)",
             color: "var(--text-3)",
             cursor: "pointer",
           }}>
@@ -55,7 +55,7 @@ export default function DeleteProjectButton({ projectId }: { projectId: string }
           style={{
             background: "rgba(239,68,68,0.15)",
             border: "1px solid rgba(239,68,68,0.3)",
-            color: "#f87171",
+            color: "#dc2626",
             cursor: deleting ? "not-allowed" : "pointer",
           }}>
           {deleting ? "…" : "Delete"}
@@ -80,7 +80,7 @@ export default function DeleteProjectButton({ projectId }: { projectId: string }
       onMouseEnter={(e) => {
         (e.currentTarget as HTMLButtonElement).style.background = "rgba(239,68,68,0.12)";
         (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(239,68,68,0.25)";
-        (e.currentTarget as HTMLButtonElement).style.color = "#f87171";
+        (e.currentTarget as HTMLButtonElement).style.color = "#dc2626";
       }}
       onMouseLeave={(e) => {
         (e.currentTarget as HTMLButtonElement).style.background = "transparent";

@@ -67,10 +67,10 @@ export default function JobProgress({ job }: Props) {
       : 0;
 
   return (
-    <div className="rounded-2xl border border-slate-800 bg-[#161b27] p-6 space-y-6">
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 space-y-6">
       <div className="flex items-center gap-3">
         <Spinner />
-        <span className="text-white font-medium">
+        <span className="text-slate-900 font-medium">
           {STAGE_LABELS[progress.status] ?? progress.status}
         </span>
       </div>
@@ -94,7 +94,7 @@ export default function JobProgress({ job }: Props) {
       />
 
       {progress.errorMessage && (
-        <p className="text-red-400 text-sm">{progress.errorMessage}</p>
+        <p className="text-red-600 text-sm">{progress.errorMessage}</p>
       )}
     </div>
   );
@@ -116,12 +116,12 @@ function ProgressBar({
   return (
     <div className="space-y-1.5">
       <div className="flex justify-between text-sm">
-        <span className="text-slate-400">{label}</span>
-        <span className="text-slate-300 font-mono">
+        <span className="text-slate-500">{label}</span>
+        <span className="text-slate-700 font-mono">
           {current} / {total || "…"} ({pct}%)
         </span>
       </div>
-      <div className="h-2 rounded-full bg-[#0f1117] overflow-hidden">
+      <div className="h-2 rounded-full bg-slate-100 overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-700 ${color}`}
           style={{ width: `${pct}%` }}
@@ -134,7 +134,7 @@ function ProgressBar({
 function Spinner() {
   return (
     <svg
-      className="h-5 w-5 animate-spin text-indigo-400"
+      className="h-5 w-5 animate-spin text-indigo-600"
       xmlns="http://www.w3.org/2000/svg"
       fill="none"
       viewBox="0 0 24 24"

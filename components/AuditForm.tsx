@@ -62,27 +62,27 @@ export default function AuditForm() {
   return (
     <form
       onSubmit={handleSubmit}
-      className="rounded-2xl border border-slate-800 bg-[#161b27] p-6 space-y-5"
+      className="rounded-2xl border border-slate-200 bg-white p-6 space-y-5"
     >
-      <h2 className="text-lg font-semibold text-white">Start a New Audit</h2>
+      <h2 className="text-lg font-semibold text-slate-900">Start a New Audit</h2>
 
       {/* URL */}
       <div className="space-y-1.5">
-        <label className="text-sm font-medium text-slate-300">Website URL</label>
+        <label className="text-sm font-medium text-slate-700">Website URL</label>
         <input
           type="url"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           placeholder="https://docs.example.com"
           required
-          className="w-full rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         />
       </div>
 
       {/* Scope + max pages */}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-slate-300">
+          <label className="text-sm font-medium text-slate-700">
             Scope Prefix <span className="text-slate-500">(optional)</span>
           </label>
           <input
@@ -90,25 +90,25 @@ export default function AuditForm() {
             value={scopePrefix}
             onChange={(e) => setScopePrefix(e.target.value)}
             placeholder="/docs/api"
-            className="w-full rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-sm font-medium text-slate-300">Max Pages</label>
+          <label className="text-sm font-medium text-slate-700">Max Pages</label>
           <input
             type="number"
             value={maxPages}
             onChange={(e) => setMaxPages(Number(e.target.value))}
             min={1}
             max={5000}
-            className="w-full rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
           />
         </div>
       </div>
 
       {/* Auth */}
       <div className="space-y-3">
-        <label className="text-sm font-medium text-slate-300">Authentication</label>
+        <label className="text-sm font-medium text-slate-700">Authentication</label>
         <div className="flex gap-2 flex-wrap">
           {(["none", "cookie", "bearer", "basic"] as AuthType[]).map((t) => (
             <button
@@ -118,7 +118,7 @@ export default function AuditForm() {
               className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-all ${
                 authType === t
                   ? "bg-indigo-600 text-white"
-                  : "bg-[#0f1117] text-slate-400 border border-slate-700 hover:border-slate-500"
+                  : "bg-slate-100 text-slate-500 border border-slate-300 hover:border-slate-500"
               }`}
             >
               {t === "none" ? "No Auth" : t === "cookie" ? "Cookie" : t === "bearer" ? "Bearer Token" : "Basic Auth"}
@@ -132,7 +132,7 @@ export default function AuditForm() {
             value={cookie}
             onChange={(e) => setCookie(e.target.value)}
             placeholder='session=abc123; csrf=xyz'
-            className="w-full rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none font-mono text-sm"
+            className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:outline-none font-mono text-sm"
           />
         )}
         {authType === "bearer" && (
@@ -141,7 +141,7 @@ export default function AuditForm() {
             value={token}
             onChange={(e) => setToken(e.target.value)}
             placeholder="Bearer token"
-            className="w-full rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none font-mono text-sm"
+            className="w-full rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:outline-none font-mono text-sm"
           />
         )}
         {authType === "basic" && (
@@ -151,21 +151,21 @@ export default function AuditForm() {
               value={username}
               onChange={(e) => setUsername(e.target.value)}
               placeholder="Username"
-              className="rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+              className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:outline-none"
             />
             <input
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               placeholder="Password"
-              className="rounded-lg border border-slate-700 bg-[#0f1117] px-3 py-2 text-white placeholder-slate-500 focus:border-indigo-500 focus:outline-none"
+              className="rounded-lg border border-slate-300 bg-slate-100 px-3 py-2 text-slate-900 placeholder-slate-400 focus:border-indigo-500 focus:outline-none"
             />
           </div>
         )}
       </div>
 
       {error && (
-        <p className="rounded-lg bg-red-950/30 border border-red-800/50 text-red-400 px-3 py-2 text-sm">
+        <p className="rounded-lg bg-red-50 border border-red-300 text-red-600 px-3 py-2 text-sm">
           {error}
         </p>
       )}

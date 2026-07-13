@@ -169,7 +169,7 @@ export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
     return (
       <div className="anim-slide-r rounded-xl p-4 flex items-center gap-3"
         style={{ background: "rgba(52,211,153,0.08)", border: "1px solid rgba(52,211,153,0.25)" }}>
-        <svg className="h-4 w-4 flex-shrink-0" style={{ color: "#34d399" }} fill="none"
+        <svg className="h-4 w-4 flex-shrink-0" style={{ color: "#059669" }} fill="none"
           viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
         </svg>
@@ -226,8 +226,8 @@ export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
           <button onClick={handleCancel} disabled={cancelling}
             className="text-xs px-3 py-1.5 rounded-full flex-shrink-0"
             style={{
-              background: "rgba(255,255,255,0.05)",
-              border: "1px solid rgba(255,255,255,0.12)",
+              background: "rgba(15,23,42,0.06)",
+              border: "1px solid rgba(15,23,42,0.12)",
               color: "var(--text-3)",
               cursor: cancelling ? "not-allowed" : "pointer",
             }}>
@@ -264,7 +264,7 @@ function ProgressBar({ label, pct, current, total, color, thick = false }: {
         </span>
       </div>
       <div className={`rounded-full overflow-hidden ${thick ? "h-2" : "h-1.5"}`}
-        style={{ background: "rgba(255,255,255,0.06)" }}>
+        style={{ background: "rgba(15,23,42,0.06)" }}>
         <div className="h-full rounded-full transition-all duration-700 ease-out"
           style={{ width: `${pct}%`, background: color }} />
       </div>

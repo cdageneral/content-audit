@@ -213,7 +213,7 @@ export default function CreateProjectForm() {
                     className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
                     style={{
                       background: authType === t ? "rgba(99,102,241,0.2)" : "var(--bg-2)",
-                      color: authType === t ? "#818cf8" : "var(--text-2)",
+                      color: authType === t ? "#4f46e5" : "var(--text-2)",
                       border: `1px solid ${authType === t ? "rgba(99,102,241,0.4)" : "var(--border)"}`,
                     }}
                   >
@@ -263,7 +263,7 @@ export default function CreateProjectForm() {
                   <div key={i} className="flex items-center gap-3 p-3 rounded-xl"
                     style={{ background: "var(--bg-2)", border: "1px solid var(--border)" }}>
                     <div className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                      style={{ background: ["#f87171","#fb923c","#facc15","#4ade80","#38bdf8"][i] }} />
+                      style={{ background: ["#dc2626","#ea580c","#ca8a04","#16a34a","#0284c7"][i] }} />
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium" style={{ color: "var(--text-1)" }}>{c.name}</p>
                       <p className="text-xs font-mono truncate" style={{ color: "var(--text-3)" }}>{c.url}</p>
@@ -311,7 +311,7 @@ export default function CreateProjectForm() {
             <ReviewRow label="Competitors" value={competitors.length === 0 ? "None added" : competitors.map(c => c.name).join(", ")} />
             <div className="rounded-xl p-4 mt-2" style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)" }}>
               <p className="text-sm" style={{ color: "var(--text-2)" }}>
-                <span style={{ color: "#818cf8", fontWeight: 500 }}>First run will start immediately</span> after you create the project —
+                <span style={{ color: "#4f46e5", fontWeight: 500 }}>First run will start immediately</span> after you create the project —
                 your site{competitors.length > 0 ? ` and ${competitors.length} competitor${competitors.length !== 1 ? "s" : ""}` : ""} will be crawled and scored.
               </p>
             </div>
@@ -320,7 +320,7 @@ export default function CreateProjectForm() {
 
         {/* Error */}
         {error && (
-          <div className="rounded-xl p-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#f87171" }}>
+          <div className="rounded-xl p-3 text-sm" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)", color: "#dc2626" }}>
             {error}
           </div>
         )}

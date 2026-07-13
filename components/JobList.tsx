@@ -2,20 +2,20 @@ import Link from "next/link";
 import type { AuditJob } from "@/lib/types";
 
 const STATUS_COLORS: Record<string, string> = {
-  queued: "text-slate-400",
-  discovering: "text-blue-400",
-  crawling: "text-violet-400",
-  scoring: "text-amber-400",
-  done: "text-emerald-400",
-  failed: "text-red-400",
+  queued: "text-slate-500",
+  discovering: "text-blue-600",
+  crawling: "text-violet-600",
+  scoring: "text-amber-600",
+  done: "text-emerald-600",
+  failed: "text-red-600",
 };
 
 export default function JobList({ jobs }: { jobs: AuditJob[] }) {
   return (
-    <div className="rounded-xl border border-slate-800 bg-[#161b27] overflow-hidden">
+    <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-slate-800 text-xs text-slate-500 uppercase tracking-wide">
+          <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
             <th className="text-left px-4 py-3">URL</th>
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Pages</th>
@@ -26,12 +26,12 @@ export default function JobList({ jobs }: { jobs: AuditJob[] }) {
           {jobs.map((job) => (
             <tr
               key={job.id}
-              className="border-b border-slate-800/50 hover:bg-[#1e2433] transition-colors"
+              className="border-b border-slate-200/70 hover:bg-slate-50 transition-colors"
             >
               <td className="px-4 py-3">
                 <Link
                   href={`/audit/${job.id}`}
-                  className="text-indigo-400 hover:text-indigo-300 truncate block max-w-sm"
+                  className="text-indigo-600 hover:text-indigo-500 truncate block max-w-sm"
                 >
                   {job.url}
                 </Link>
@@ -41,7 +41,7 @@ export default function JobList({ jobs }: { jobs: AuditJob[] }) {
                   {job.status}
                 </span>
               </td>
-              <td className="px-4 py-3 text-center text-slate-400 font-mono text-xs">
+              <td className="px-4 py-3 text-center text-slate-500 font-mono text-xs">
                 {job.scoredPages}/{job.totalPages}
               </td>
               <td className="px-4 py-3 text-center text-slate-500 text-xs">
