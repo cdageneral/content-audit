@@ -46,7 +46,12 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true });
   } catch (err) {
     console.error("[qstash] Handler error:", err);
-    return NextResponse.json({ error: String(err) }, { status: 200 });
+    // Return 5xx so QStash retries (retries=2). Previously this returned 200,
+    // which QStash reads as success — a transient failure would silently drop
+    // the batch and stall the job forever with no self-heal. Score/crawl writes
+    // are idempotent (upsertPage ON CONFLICT, upsertScore delete+insert, and the
+    // atomic 'scoring' claim), so retries are safe.
+    return NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
