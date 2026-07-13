@@ -142,6 +142,13 @@ export async function getPagesByJob(jobId: string): Promise<{ id: string; url: s
 
 export async function upsertScore(score: PageScore): Promise<void> {
   const sql = getDb();
+  // NOTE: page_scores has no UNIQUE constraint on page_id in the live DB, so we
+  // cannot use `INSERT ... ON CONFLICT (page_id)` (Postgres throws 42P10 — "no
+  // unique or exclusion constraint matching the ON CONFLICT specification",
+  // which previously stalled every audit at the scoring step). Delete-then-
+  // insert is idempotent per page and safe here because each page is scored by
+  // exactly one score_batch, so there is no concurrent writer for a given page.
+  await sql`DELETE FROM page_scores WHERE page_id = ${score.pageId}`;
   await sql`
     INSERT INTO page_scores (
       page_id, job_id,
@@ -160,21 +167,6 @@ export async function upsertScore(score: PageScore): Promise<void> {
       ${JSON.stringify(score.recommendations)},
       ${score.modelVersion}
     )
-    ON CONFLICT (page_id) DO UPDATE SET
-      score_core_intent       = EXCLUDED.score_core_intent,
-      score_edge_cases        = EXCLUDED.score_edge_cases,
-      score_implied_questions = EXCLUDED.score_implied_questions,
-      score_fan_out_queries   = EXCLUDED.score_fan_out_queries,
-      score_retrievable       = EXCLUDED.score_retrievable,
-      score_extractable       = EXCLUDED.score_extractable,
-      score_citable           = EXCLUDED.score_citable,
-      score_reusable          = EXCLUDED.score_reusable,
-      rationale               = EXCLUDED.rationale,
-      overall_score           = EXCLUDED.overall_score,
-      grade                   = EXCLUDED.grade,
-      recommendations         = EXCLUDED.recommendations,
-      model_version           = EXCLUDED.model_version,
-      scored_at               = NOW()
   `;
 }
 
