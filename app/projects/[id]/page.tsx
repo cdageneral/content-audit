@@ -7,6 +7,7 @@ import TrendChart from "@/components/TrendChart";
 import CompetitorMatrix from "@/components/CompetitorMatrix";
 import RunButton from "@/components/RunButton";
 import AddCompetitorForm from "@/components/AddCompetitorForm";
+import DeleteCompetitorButton from "@/components/DeleteCompetitorButton";
 import AuditResults from "@/components/AuditResults";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
 
@@ -61,20 +62,6 @@ export default async function ProjectHubPage({
       AND created_at <= NOW() - INTERVAL '2 hours'
   `.catch(() => null);
 
-  // Sites whose MOST RECENT audit was stopped because they block crawling.
-  const latestByTarget = await sql`
-    SELECT DISTINCT ON (COALESCE(competitor_id::text, 'client'))
-      id, url, status, error_message
-    FROM audit_jobs
-    WHERE project_id = ${params.id}
-    ORDER BY COALESCE(competitor_id::text, 'client'), created_at DESC
-  `.catch(() => []);
-  const blockedJobs = (latestByTarget as any[]).filter(
-    (j) =>
-      j.status === "failed" &&
-      String(j.error_message ?? "").toLowerCase().includes("blocks automated crawling")
-  );
-
   const isRunning = activeJobs.length > 0;
 
   return (
@@ -116,44 +103,6 @@ export default async function ProjectHubPage({
       {/* ── Active run banner (live progress) ─────────────── */}
       {isRunning && (
         <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />
-      )}
-
-      {/* ── Blocked-site alert ─────────────────────────────── */}
-      {blockedJobs.length > 0 && (
-        <div
-          className="anim-slide-r rounded-xl p-4 space-y-2"
-          style={{ background: "rgba(251,191,36,0.1)", border: "1px solid rgba(251,191,36,0.35)" }}
-        >
-          <div className="flex items-center gap-2">
-            <svg
-              className="h-4 w-4 flex-shrink-0"
-              style={{ color: "#d97706" }}
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
-              />
-            </svg>
-            <p className="text-sm font-medium" style={{ color: "var(--text-1)" }}>
-              {blockedJobs.length === 1
-                ? "A site blocks automated crawling"
-                : "Some sites block automated crawling"}
-            </p>
-          </div>
-          {blockedJobs.map((j) => (
-            <p key={String(j.id)} className="text-xs pl-6" style={{ color: "var(--text-2)" }}>
-              <span className="font-mono" style={{ color: "var(--text-1)" }}>
-                {String(j.url).replace(/^https?:\/\//, "")}
-              </span>{" "}
-              — {String(j.error_message)}
-            </p>
-          ))}
-        </div>
       )}
 
       {/* ── Score trend chart ──────────────────────────────── */}
@@ -208,7 +157,7 @@ export default async function ProjectHubPage({
           ) : (
             <div className="space-y-3">
               {project.competitors.map((c) => (
-                <div key={c.id} className="flex items-center gap-3 p-3 rounded-lg"
+                <div key={c.id} className="group flex items-center gap-3 p-3 rounded-lg"
                   style={{ background: "var(--bg-2)" }}>
                   <div className="w-2.5 h-2.5 rounded-full flex-shrink-0"
                     style={{ background: COMPETITOR_COLORS[c.colorIndex] }} />
@@ -234,6 +183,7 @@ export default async function ProjectHubPage({
                   ) : (
                     <span className="text-xs" style={{ color: "var(--text-3)" }}>Not audited</span>
                   )}
+                  <DeleteCompetitorButton projectId={params.id} competitorId={c.id} name={c.name} />
                 </div>
               ))}
             </div>
