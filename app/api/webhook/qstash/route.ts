@@ -60,6 +60,51 @@ function blockedMessage(status: number): string {
   return `This site blocks automated crawling (${code}), so it can't be audited. The crawl was stopped after repeated blocks. If the site relies on JavaScript, enabling headless-browser crawling may help.`;
 }
 
+// Max URLs to retry with the (slow, heavy) headless browser before giving up.
+const HEADLESS_MAX = 5;
+
+function blockedMessageHeadless(status: number): string {
+  const code = status && status >= 400 ? `HTTP ${status}` : "bot challenge";
+  return `This site blocks automated crawling (${code}) and stayed blocked even after a second pass with a full headless browser. The audit was stopped — this site can't be crawled automatically.`;
+}
+
+// Second-pass rescue: re-crawl a blocked site's URLs with a real headless
+// browser (Playwright). Returns the number of pages successfully stored. Bails
+// early once it's clear the site is hard-walled, to protect the function time
+// budget. Any launch/runtime error degrades to "still blocked" (0 salvaged).
+async function tryHeadlessRescue(
+  jobId: string,
+  urls: string[],
+  auth: CrawlBatchMessage["auth"]
+): Promise<number> {
+  console.warn(`[crawl] Job ${jobId}: plain-fetch blocked — trying headless browser (Playwright)…`);
+  let ok = 0;
+  const cap = Math.min(urls.length, HEADLESS_MAX);
+  for (let i = 0; i < cap; i++) {
+    const url = urls[i];
+    try {
+      const page = await extractPage(jobId, url, {
+        usePlaywright: true,
+        auth: auth ?? undefined,
+      });
+      if (page && !isBlockedPage(page)) {
+        await upsertPage(page);
+        ok++;
+        console.log(`[crawl] 🅟 ${url} (headless)`);
+      } else {
+        console.warn(`[crawl] 🅟⛔ ${url}: still blocked (headless)`);
+      }
+    } catch (err) {
+      console.error(`[crawl] headless error ${url}:`, err);
+    } finally {
+      await incrementJobProgress(jobId, "crawled_pages");
+    }
+    // Hard-walled: if the first two headless attempts also fail, stop early.
+    if (ok === 0 && i >= 1) break;
+  }
+  return ok;
+}
+
 export async function POST(req: NextRequest) {
   const { valid, body } = await verifyQStashSignature(req);
 
@@ -134,18 +179,32 @@ async function handleCrawlBatch(
       await incrementJobProgress(jobId, "crawled_pages");
     }
 
-    // Early stop: if nothing is getting through and we've hit repeated blocks,
-    // the whole site is blocking automated crawling. Stop now with a clear alert
-    // instead of grinding through every URL (which risks a function timeout).
+    // Early stop scanning: after repeated blocks with nothing getting through,
+    // end the plain-fetch pass now (avoids a function timeout) and hand off to
+    // the headless-browser second pass below.
     if (okCount === 0 && blockedCount >= 3) {
-      await updateJobStatus(jobId, "failed", {
-        errorMessage: blockedMessage(lastBlockStatus),
-      });
       console.warn(
-        `[crawl] Job ${jobId}: site blocks automated crawling — stopped after ${blockedCount} blocks.`
+        `[crawl] Job ${jobId}: ${blockedCount} blocks, 0 crawled — ending plain-fetch pass, escalating to headless.`
       );
+      break;
+    }
+  }
+
+  // ── Second pass: full headless browser (Playwright) ─────────
+  // If the plain-fetch crawler got nothing but hit blocks, the site may be
+  // JS-rendered or bot-walling simple requests. Retry with a real browser
+  // before giving up. If it's STILL blocked, stop with a clear alert.
+  if (okCount === 0 && blockedCount > 0) {
+    const salvaged = await tryHeadlessRescue(jobId, urls, auth);
+    if (salvaged === 0) {
+      await updateJobStatus(jobId, "failed", {
+        errorMessage: blockedMessageHeadless(lastBlockStatus),
+      });
+      console.warn(`[crawl] Job ${jobId}: blocked even with a headless browser — stopped.`);
       return;
     }
+    okCount += salvaged;
+    console.log(`[crawl] Job ${jobId}: headless rescue salvaged ${salvaged} page(s).`);
   }
 
   // Re-fetch job to get latest crawled count after this batch
