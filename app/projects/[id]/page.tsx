@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { getProjectDetail } from "@/lib/db/projects";
+import { getProjectDetail, refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
 import { getScoresByJob } from "@/lib/db/client";
 import { neon } from "@neondatabase/serverless";
 import TrendChart from "@/components/TrendChart";
@@ -25,6 +25,34 @@ export default async function ProjectHubPage({
 
   // Load latest scores for client + each competitor
   const sql = neon(process.env.DATABASE_URL!);
+
+  // -- Self-heal: finalize jobs stuck in 'scoring'/'crawling' whose pages are
+  //    all scored. The score webhook's done-check now keys off row counts, but
+  //    this sweep is a belt-and-suspenders catch for any job that finished
+  //    scoring yet never flipped to 'done' (e.g. a batch that died right before
+  //    its done-check, or a legacy job stranded by the old scored_pages-counter
+  //    bug). Cheap: only touches this project's not-yet-final jobs.
+  const stuckButScored = await sql`
+    SELECT j.id, j.competitor_id
+    FROM audit_jobs j
+    WHERE j.project_id = ${params.id}
+      AND j.status IN ('scoring', 'crawling')
+      AND (SELECT COUNT(*) FROM audit_pages p WHERE p.job_id = j.id) > 0
+      AND (SELECT COUNT(*) FROM page_scores s WHERE s.job_id = j.id)
+          >= (SELECT COUNT(*) FROM audit_pages p WHERE p.job_id = j.id)
+  `.catch(() => [] as Record<string, unknown>[]);
+  for (const j of stuckButScored) {
+    await sql`
+      UPDATE audit_jobs SET status = 'done', completed_at = NOW()
+      WHERE id = ${j.id as string} AND status IN ('scoring', 'crawling')
+    `.catch(() => null);
+    if (j.competitor_id) {
+      await refreshCompetitorCache(String(j.competitor_id)).catch(() => null);
+    } else {
+      await refreshProjectCache(params.id).catch(() => null);
+    }
+  }
+
   const latestJobs = await sql`
     SELECT DISTINCT ON (COALESCE(competitor_id::text, 'client'))
       id, competitor_id, completed_at, status
