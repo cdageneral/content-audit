@@ -26,8 +26,10 @@ export default async function ProjectHubPage({
   const project = await getProjectDetail(params.id).catch(() => null);
   if (!project) return notFound();
 
-  // Load latest scores for client + each competitor
-  const sql = neon(process.env.DATABASE_URL!);
+  // Load latest scores for client + each competitor.
+  // no-store: the Neon driver reads via fetch, which Next.js caches by default;
+  // without this the hub can render a stale snapshot (see lib/db/client.ts).
+  const sql = neon(process.env.DATABASE_URL!, { fetchOptions: { cache: "no-store" } });
 
   // -- Self-heal: reconcile jobs stuck in 'scoring'/'crawling' against the
   //    ACTUAL page_scores rows. Two failure modes are covered:
