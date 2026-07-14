@@ -22,6 +22,44 @@ import { DEFAULT_WEIGHTS } from "@/lib/types";
 // Threshold: if ≥85% of pages crawled, don't wait for the final batch index
 const CRAWL_COMPLETION_THRESHOLD = 0.85;
 
+// ── Block detection ───────────────────────────────────────────
+// A site "blocks" our crawler when it returns an auth/rate-limit/forbidden
+// status, or serves a bot-challenge interstitial (Cloudflare, Incapsula, etc.)
+// in place of real content. Such responses must not be stored or scored.
+const BLOCK_STATUS = new Set([401, 403, 407, 429, 451, 503]);
+const CHALLENGE_MARKERS = [
+  "just a moment",
+  "checking your browser",
+  "attention required",
+  "cloudflare",
+  "captcha",
+  "access denied",
+  "request unsuccessful",
+  "pardon our interruption",
+  "verify you are human",
+  "enable javascript and cookies",
+];
+
+function isBlockedPage(page: {
+  httpStatus: number;
+  title: string;
+  bodyText: string;
+  wordCount: number;
+}): boolean {
+  if (BLOCK_STATUS.has(page.httpStatus)) return true;
+  // 200 OK but a near-empty interstitial carrying a known challenge phrase.
+  if (page.wordCount < 60) {
+    const hay = `${page.title} ${page.bodyText.slice(0, 2000)}`.toLowerCase();
+    if (CHALLENGE_MARKERS.some((m) => hay.includes(m))) return true;
+  }
+  return false;
+}
+
+function blockedMessage(status: number): string {
+  const code = status && status >= 400 ? `HTTP ${status}` : "bot challenge";
+  return `This site blocks automated crawling (${code}), so it can't be audited. The crawl was stopped after repeated blocks. If the site relies on JavaScript, enabling headless-browser crawling may help.`;
+}
+
 export async function POST(req: NextRequest) {
   const { valid, body } = await verifyQStashSignature(req);
 
@@ -67,23 +105,46 @@ async function handleCrawlBatch(
   const job = await getJob(jobId);
   if (!job || job.status === "failed" || job.status === "scoring" || job.status === "done") return;
 
+  let okCount = 0;
+  let blockedCount = 0;
+  let lastBlockStatus = 0;
+
   for (const url of urls) {
     try {
       const page = await extractPage(jobId, url, {
         usePlaywright: false,
         auth: auth ?? undefined,
       });
-      if (page) {
+      if (page && isBlockedPage(page)) {
+        // A block/challenge page is not real content — don't store or score it.
+        blockedCount++;
+        lastBlockStatus = page.httpStatus;
+        console.warn(`[crawl] ⛔ ${url}: blocked (HTTP ${page.httpStatus})`);
+      } else if (page) {
         await upsertPage(page);
+        okCount++;
         console.log(`[crawl] ✓ ${url}`);
       } else {
-        console.warn(`[crawl] ✗ ${url}: returned null (blocked or empty)`);
+        console.warn(`[crawl] ✗ ${url}: returned null (empty or unreachable)`);
       }
     } catch (err) {
       console.error(`[crawl] ✗ ${url}:`, err);
     } finally {
       // Always count as attempted — blocked/timed-out pages must not stall the pipeline
       await incrementJobProgress(jobId, "crawled_pages");
+    }
+
+    // Early stop: if nothing is getting through and we've hit repeated blocks,
+    // the whole site is blocking automated crawling. Stop now with a clear alert
+    // instead of grinding through every URL (which risks a function timeout).
+    if (okCount === 0 && blockedCount >= 3) {
+      await updateJobStatus(jobId, "failed", {
+        errorMessage: blockedMessage(lastBlockStatus),
+      });
+      console.warn(
+        `[crawl] Job ${jobId}: site blocks automated crawling — stopped after ${blockedCount} blocks.`
+      );
+      return;
     }
   }
 
@@ -118,10 +179,21 @@ async function handleCrawlBatch(
 
   const pages = await getPagesByJob(jobId);
 
-  // If no pages were successfully crawled, mark done immediately — nothing to score
+  // If no pages were successfully crawled, finish now — nothing to score.
+  // Distinguish a site that BLOCKS crawlers (raise an alert) from a genuinely
+  // empty crawl (just mark done).
   if (pages.length === 0) {
-    await updateJobStatus(jobId, "done");
-    console.log(`[crawl] Job ${jobId}: 0 pages in DB after crawl — marking done.`);
+    if (blockedCount > 0) {
+      await updateJobStatus(jobId, "failed", {
+        errorMessage: blockedMessage(lastBlockStatus),
+      });
+      console.warn(
+        `[crawl] Job ${jobId}: 0 pages crawled, ${blockedCount} blocked — site blocks automated crawling.`
+      );
+    } else {
+      await updateJobStatus(jobId, "done");
+      console.log(`[crawl] Job ${jobId}: 0 pages in DB after crawl — marking done.`);
+    }
     return;
   }
 
