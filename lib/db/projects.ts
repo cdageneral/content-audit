@@ -9,6 +9,14 @@ function db() {
 
 // ── Types ─────────────────────────────────────────────────────
 
+/**
+ * How a project's client URL set is built for each audit run:
+ *   'domain' → crawl/discover the whole site (default, legacy behaviour)
+ *   'single' → audit exactly one page (websiteUrl)
+ *   'list'   → audit an explicit set of URLs (sourceUrls)
+ */
+export type AuditSource = "domain" | "single" | "list";
+
 export interface Project {
   id: string;
   clientName: string;
@@ -17,6 +25,9 @@ export interface Project {
   maxPages: number;
   authConfig: Record<string, unknown> | null;
   weights: DimensionScores;
+  auditSource: AuditSource;
+  /** Explicit URL list, only used when auditSource === 'list' */
+  sourceUrls: string[] | null;
   latestScore: number | null;
   latestGrade: string | null;
   scoreDelta: number | null;
@@ -47,6 +58,10 @@ export interface ProjectCreate {
   maxPages?: number;
   authConfig?: Record<string, unknown>;
   weights?: Partial<DimensionScores>;
+  /** Defaults to 'domain' when omitted */
+  auditSource?: AuditSource;
+  /** Required when auditSource === 'list' */
+  sourceUrls?: string[];
 }
 
 export interface ScoreHistoryPoint {
@@ -75,15 +90,25 @@ export interface ProjectDetail extends Project {
 export async function createProject(input: ProjectCreate): Promise<Project> {
   const sql = db();
   const weights = { ...DEFAULT_WEIGHTS, ...input.weights };
+  const auditSource = input.auditSource ?? "domain";
+  const sourceUrls =
+    auditSource === "list" && input.sourceUrls?.length
+      ? JSON.stringify(input.sourceUrls)
+      : null;
   const rows = await sql`
-    INSERT INTO projects (client_name, website_url, scope_prefix, max_pages, auth_config, weights)
+    INSERT INTO projects (
+      client_name, website_url, scope_prefix, max_pages,
+      auth_config, weights, audit_source, source_urls
+    )
     VALUES (
       ${input.clientName},
       ${input.websiteUrl},
       ${input.scopePrefix ?? null},
       ${input.maxPages ?? 100},
       ${input.authConfig ? JSON.stringify(input.authConfig) : null},
-      ${JSON.stringify(weights)}
+      ${JSON.stringify(weights)},
+      ${auditSource},
+      ${sourceUrls}
     )
     RETURNING *
   `;
@@ -287,6 +312,8 @@ function rowToProject(r: Record<string, unknown>): Project {
     maxPages: r.max_pages as number,
     authConfig: r.auth_config as Record<string, unknown> | null,
     weights: (r.weights as DimensionScores) ?? DEFAULT_WEIGHTS,
+    auditSource: ((r.audit_source as AuditSource) ?? "domain"),
+    sourceUrls: (r.source_urls as string[] | null) ?? null,
     latestScore: r.latest_score as number | null,
     latestGrade: r.latest_grade as string | null,
     scoreDelta: r.score_delta as number | null,

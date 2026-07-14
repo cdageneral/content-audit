@@ -12,6 +12,14 @@ CREATE TABLE IF NOT EXISTS projects (
   max_pages       INTEGER NOT NULL DEFAULT 100,
   auth_config     JSONB,
   weights         JSONB NOT NULL DEFAULT '{}',
+  -- How the client's URL set is built for each run:
+  --   'domain' → crawl/discover the whole site (default, legacy behaviour)
+  --   'single' → audit exactly one page (website_url)
+  --   'list'   → audit an explicit set of URLs (source_urls)
+  audit_source    TEXT NOT NULL DEFAULT 'domain'
+                  CHECK (audit_source IN ('domain','single','list')),
+  -- Explicit URL list for audit_source = 'list' (JSON array of strings)
+  source_urls     JSONB,
   -- Cached from latest completed run
   latest_score    SMALLINT,
   latest_grade    CHAR(1),
@@ -23,6 +31,22 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_created ON projects(created_at DESC);
+
+-- ── Patch existing projects tables (idempotent) ───────────────
+-- For databases created before audit_source / source_urls existed.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS audit_source TEXT NOT NULL DEFAULT 'domain';
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS source_urls  JSONB;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.constraint_column_usage
+    WHERE table_name = 'projects' AND constraint_name = 'projects_audit_source_check'
+  ) THEN
+    ALTER TABLE projects
+      ADD CONSTRAINT projects_audit_source_check
+      CHECK (audit_source IN ('domain','single','list'));
+  END IF;
+END$$;
 
 DROP TRIGGER IF EXISTS projects_updated_at ON projects;
 CREATE TRIGGER projects_updated_at
