@@ -12,6 +12,7 @@ import {
   getPagesByJob,
   updateJobStatus,
   incrementJobProgress,
+  countScoresByJob,
   getJob,
 } from "@/lib/db/client";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
@@ -325,10 +326,14 @@ async function handleScoreBatch(
 
   // Check if all pages are scored → mark job done
   // Use allPages.length (actual DB rows) NOT crawledPages counter, which counts failed fetches too
+  // NOTE: compare countScoresByJob (real rows) NOT the scored_pages counter,
+  // which can under-count under concurrent writes and strand a fully-scored
+  // job in `scoring` forever (observed live: 10 rows written, counter read 0).
+  const scoredRows = await countScoresByJob(jobId);
   const updatedJob = await getJob(jobId);
-  if (updatedJob && allPages.length > 0 && updatedJob.scoredPages >= allPages.length) {
+  if (updatedJob && allPages.length > 0 && scoredRows >= allPages.length) {
     await updateJobStatus(jobId, "done");
-    console.log(`[score] Job ${jobId} complete! ${updatedJob.scoredPages}/${allPages.length} pages scored.`);
+    console.log(`[score] Job ${jobId} complete! ${scoredRows}/${allPages.length} pages scored.`);
 
     const sql = neon(process.env.DATABASE_URL!);
     const jobRows = await sql`
