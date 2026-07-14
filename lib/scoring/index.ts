@@ -14,7 +14,21 @@ import type {
 import { DEFAULT_WEIGHTS as DW } from "@/lib/types";
 import { SCORING_SYSTEM_PROMPT, SCORE_TOOL_DEFINITION } from "./prompt";
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// Bounded client: a per-request network timeout + capped retries so a single
+// slow/hung Anthropic call can never block a whole scoring batch indefinitely.
+const client = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+  timeout: 30_000,
+  maxRetries: 2,
+});
+
+// Hard per-page ceiling (belt to the SDK timeout's suspenders): if one page
+// somehow exceeds this, we abandon it, record a zero-score, and move on.
+const PAGE_SCORE_TIMEOUT_MS = 45_000;
+
+// Whole-batch deadline: guarantee the function returns before Vercel's 300s
+// maxDuration kills it mid-batch (which would drop every in-memory score).
+const BATCH_DEADLINE_MS = 250_000;
 
 const SCORING_MODEL = process.env.SCORING_MODEL ?? "claude-haiku-4-5-20251001";
 
@@ -56,9 +70,31 @@ export async function scoreBatch(
 ): Promise<PageScore[]> {
   const results: PageScore[] = [];
 
+  const batchStart = Date.now();
+
   for (let i = 0; i < pages.length; i++) {
+    // Whole-batch deadline guard: if we're near Vercel's function limit, stop
+    // calling Claude and zero-fill the rest so the scores we DID compute still
+    // get written and the job can complete instead of being killed mid-batch.
+    if (Date.now() - batchStart > BATCH_DEADLINE_MS) {
+      console.warn(
+        `[scoring] Batch deadline hit after ${i}/${pages.length} pages — zero-filling remainder.`
+      );
+      for (let j = i; j < pages.length; j++) {
+        results.push(zeroScore(pages[j], pageIds[j]));
+        onProgress?.(pageIds[j]);
+      }
+      break;
+    }
+
     try {
-      const score = await scorePage(pages[i], pageIds[i], weights);
+      // Race each page against a hard timeout so one slow/hung call can never
+      // freeze the batch (the original bug: no timeout → permanent stall).
+      const score = await withTimeout(
+        scorePage(pages[i], pageIds[i], weights),
+        PAGE_SCORE_TIMEOUT_MS,
+        pages[i].url
+      );
       results.push(score);
     } catch (err) {
       console.error(`[scoring] Error scoring ${pages[i].url}:`, err);
@@ -194,6 +230,27 @@ function clamp(val: number): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+// Reject if `promise` doesn't settle within `ms`. Used to bound each Claude
+// scoring call so one hung request can't stall an entire batch.
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`Scoring timed out after ${ms}ms: ${label}`)),
+      ms
+    );
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
 }
 
 function zeroScore(page: CrawledPage, pageId: string): PageScore {
