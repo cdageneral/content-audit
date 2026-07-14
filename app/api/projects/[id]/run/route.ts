@@ -47,19 +47,33 @@ export async function POST(req: NextRequest, { params }: Params) {
       WHERE id = ${clientJob.id}
     `;
 
-    await updateJobStatus(clientJob.id, "discovering");
-    const clientUrls = await discoverUrls({
-      rootUrl: project.websiteUrl,
-      scopePrefix: project.scopePrefix ?? undefined,
-      maxPages: project.maxPages,
-    });
+    // ── Build the client URL set by audit source ──────────────
+    //   'single' → the one page (no discovery)
+    //   'list'   → the explicit URL list (no discovery), capped by maxPages
+    //   'domain' → discover the whole site (sitemap → BFS), as before
+    let clientUrls: string[];
+    if (project.auditSource === "single") {
+      clientUrls = [project.websiteUrl];
+    } else if (project.auditSource === "list") {
+      clientUrls = Array.from(new Set(project.sourceUrls ?? [])).slice(0, project.maxPages);
+    } else {
+      await updateJobStatus(clientJob.id, "discovering");
+      clientUrls = await discoverUrls({
+        rootUrl: project.websiteUrl,
+        scopePrefix: project.scopePrefix ?? undefined,
+        maxPages: project.maxPages,
+      });
+    }
 
     if (clientUrls.length > 0) {
       await updateJobStatus(clientJob.id, "crawling", { totalPages: clientUrls.length });
       await enqueueCrawlBatches(clientJob.id, clientUrls, null);
     } else {
       await updateJobStatus(clientJob.id, "failed", {
-        errorMessage: "No URLs discovered for client site",
+        errorMessage:
+          project.auditSource === "list"
+            ? "No valid URLs in the uploaded list"
+            : "No URLs discovered for client site",
       });
     }
 
