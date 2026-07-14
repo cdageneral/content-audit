@@ -4,11 +4,48 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 type AuthType = "none" | "cookie" | "bearer" | "basic";
+type AuditSource = "domain" | "single" | "list";
 
 interface CompetitorInput {
   name: string;
   url: string;
   scopePrefix: string;
+}
+
+const SOURCE_LABELS: Record<AuditSource, string> = {
+  domain: "Whole domain",
+  single: "Single URL",
+  list: "URL list",
+};
+
+const SOURCE_HINTS: Record<AuditSource, string> = {
+  domain: "Crawl and discover every page on the site (via sitemap, then links).",
+  single: "Audit just one specific page — no crawling.",
+  list: "Audit an exact set of URLs you provide — paste them or upload a .txt / .csv.",
+};
+
+/**
+ * Parse a blob of pasted/uploaded text into a deduped list of valid http(s)
+ * URLs. Accepts one URL per line; for CSV rows the first column is used.
+ */
+function parseUrlList(text: string): { valid: string[]; invalidCount: number } {
+  const seen = new Set<string>();
+  const valid: string[] = [];
+  let invalidCount = 0;
+  for (const rawLine of text.split(/\r?\n/)) {
+    const cell = rawLine.split(",")[0].trim().replace(/^["']|["']$/g, "");
+    if (!cell) continue;
+    try {
+      const u = new URL(cell);
+      if (u.protocol !== "http:" && u.protocol !== "https:") { invalidCount++; continue; }
+      if (seen.has(u.href)) continue;
+      seen.add(u.href);
+      valid.push(u.href);
+    } catch {
+      invalidCount++;
+    }
+  }
+  return { valid, invalidCount };
 }
 
 type Step = "details" | "auth" | "competitors" | "review";
@@ -29,9 +66,12 @@ export default function CreateProjectForm() {
 
   // Form fields
   const [clientName, setClientName] = useState("");
+  const [auditSource, setAuditSource] = useState<AuditSource>("domain");
   const [websiteUrl, setWebsiteUrl] = useState("");
   const [scopePrefix, setScopePrefix] = useState("");
   const [maxPages, setMaxPages] = useState(100);
+  const [urlListText, setUrlListText] = useState("");
+  const [fileName, setFileName] = useState("");
   const [authType, setAuthType] = useState<AuthType>("none");
   const [cookie, setCookie] = useState("");
   const [token, setToken] = useState("");
@@ -43,14 +83,34 @@ export default function CreateProjectForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
+  // Parsed URL list (for the 'list' source)
+  const { valid: parsedUrls, invalidCount } = parseUrlList(urlListText);
+
   // ── Validation per step ─────────────────────────────────────
   function canAdvance(): boolean {
-    if (step === "details") return !!clientName.trim() && isValidUrl(websiteUrl);
+    if (step === "details") {
+      if (!clientName.trim()) return false;
+      if (auditSource === "list") return parsedUrls.length > 0;
+      return isValidUrl(websiteUrl); // domain + single both need a valid URL
+    }
     return true;
   }
 
   function isValidUrl(u: string) {
     try { new URL(u); return true; } catch { return false; }
+  }
+
+  function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = String(reader.result ?? "");
+      setUrlListText(prev => (prev.trim() ? prev.replace(/\s*$/, "") + "\n" + text : text));
+    };
+    reader.readAsText(file);
+    e.target.value = ""; // allow re-selecting the same file
   }
 
   function advance() {
@@ -83,16 +143,29 @@ export default function CreateProjectForm() {
       : authType === "basic"  ? { type: authType, username, password }
       : undefined;
 
+    // Resolve source-dependent fields.
+    const isList = auditSource === "list";
+    // For a URL list, the project's identity URL is the first URL; scope is
+    // meaningless. Cap max_pages to the list length so nothing is silently
+    // dropped. A single-page audit only ever touches one page.
+    const resolvedWebsiteUrl = isList ? parsedUrls[0] : websiteUrl;
+    const resolvedMaxPages =
+      auditSource === "single" ? 1
+      : isList ? Math.min(parsedUrls.length, 5000)
+      : maxPages;
+
     try {
       const res = await fetch("/api/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientName,
-          websiteUrl,
-          scopePrefix: scopePrefix || undefined,
-          maxPages,
+          websiteUrl: resolvedWebsiteUrl,
+          scopePrefix: auditSource === "domain" ? (scopePrefix || undefined) : undefined,
+          maxPages: resolvedMaxPages,
           authConfig,
+          auditSource,
+          sourceUrls: isList ? parsedUrls : undefined,
           competitors: competitors.map(c => ({
             name: c.name,
             url: c.url,
@@ -154,44 +227,125 @@ export default function CreateProjectForm() {
                 onChange={e => setClientName(e.target.value)}
               />
             </div>
+            {/* Audit source selector */}
             <div>
               <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
-                Website URL
+                Audit source
               </label>
-              <input
-                type="url"
-                className="dark-input"
-                placeholder="https://docs.example.com"
-                value={websiteUrl}
-                onChange={e => setWebsiteUrl(e.target.value)}
-              />
+              <div className="flex gap-2 flex-wrap">
+                {(["domain", "single", "list"] as AuditSource[]).map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setAuditSource(s)}
+                    className="px-4 py-2 rounded-lg text-sm font-medium transition-all"
+                    style={{
+                      background: auditSource === s ? "rgba(99,102,241,0.2)" : "var(--bg-2)",
+                      color: auditSource === s ? "#4f46e5" : "var(--text-2)",
+                      border: `1px solid ${auditSource === s ? "rgba(99,102,241,0.4)" : "var(--border)"}`,
+                    }}
+                  >
+                    {SOURCE_LABELS[s]}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs mt-2" style={{ color: "var(--text-3)" }}>
+                {SOURCE_HINTS[auditSource]}
+              </p>
             </div>
-            <div className="grid grid-cols-2 gap-4">
+
+            {/* Domain + single share a URL field (relabeled) */}
+            {auditSource !== "list" && (
               <div>
                 <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
-                  Scope prefix <span style={{ color: "var(--text-3)", fontWeight: 400 }}>(optional)</span>
+                  {auditSource === "single" ? "Page URL" : "Website URL"}
                 </label>
                 <input
+                  type="url"
                   className="dark-input"
-                  placeholder="/docs"
-                  value={scopePrefix}
-                  onChange={e => setScopePrefix(e.target.value)}
+                  placeholder={auditSource === "single" ? "https://example.com/blog/my-post" : "https://docs.example.com"}
+                  value={websiteUrl}
+                  onChange={e => setWebsiteUrl(e.target.value)}
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
-                  Max pages per run
-                </label>
-                <input
-                  type="number"
-                  className="dark-input"
-                  value={maxPages}
-                  min={1}
-                  max={5000}
-                  onChange={e => setMaxPages(Number(e.target.value))}
-                />
+            )}
+
+            {/* Domain-only: scope + max pages */}
+            {auditSource === "domain" && (
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
+                    Scope prefix <span style={{ color: "var(--text-3)", fontWeight: 400 }}>(optional)</span>
+                  </label>
+                  <input
+                    className="dark-input"
+                    placeholder="/docs"
+                    value={scopePrefix}
+                    onChange={e => setScopePrefix(e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
+                    Max pages per run
+                  </label>
+                  <input
+                    type="number"
+                    className="dark-input"
+                    value={maxPages}
+                    min={1}
+                    max={5000}
+                    onChange={e => setMaxPages(Number(e.target.value))}
+                  />
+                </div>
               </div>
-            </div>
+            )}
+
+            {/* URL list: paste + upload */}
+            {auditSource === "list" && (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
+                    URLs <span style={{ color: "var(--text-3)", fontWeight: 400 }}>(one per line)</span>
+                  </label>
+                  <textarea
+                    className="dark-input font-mono text-xs"
+                    rows={7}
+                    placeholder={"https://example.com/page-1\nhttps://example.com/page-2\nhttps://example.com/blog/post"}
+                    value={urlListText}
+                    onChange={e => setUrlListText(e.target.value)}
+                    style={{ resize: "vertical" }}
+                  />
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <label
+                    className="btn-ghost text-sm cursor-pointer"
+                    style={{ color: "var(--indigo)" }}
+                  >
+                    Upload .txt / .csv
+                    <input
+                      type="file"
+                      accept=".txt,.csv,text/plain,text/csv"
+                      onChange={handleFile}
+                      style={{ display: "none" }}
+                    />
+                  </label>
+                  {fileName && (
+                    <span className="text-xs font-mono truncate" style={{ color: "var(--text-3)" }}>
+                      {fileName}
+                    </span>
+                  )}
+                  <span className="text-xs ml-auto" style={{ color: parsedUrls.length ? "var(--indigo)" : "var(--text-3)" }}>
+                    {parsedUrls.length} valid URL{parsedUrls.length !== 1 ? "s" : ""}
+                    {invalidCount > 0 && (
+                      <span style={{ color: "#d97706" }}> · {invalidCount} skipped</span>
+                    )}
+                  </span>
+                </div>
+                <p className="text-xs" style={{ color: "var(--text-3)" }}>
+                  For CSVs, the first column of each row is used. Blank and non-http(s) lines are skipped.
+                </p>
+              </div>
+            )}
           </>
         )}
 
@@ -304,15 +458,25 @@ export default function CreateProjectForm() {
         {step === "review" && (
           <>
             <ReviewRow label="Client" value={clientName} />
-            <ReviewRow label="Website" value={websiteUrl} mono />
-            {scopePrefix && <ReviewRow label="Scope" value={scopePrefix} mono />}
-            <ReviewRow label="Max pages" value={String(maxPages)} />
+            <ReviewRow label="Audit source" value={SOURCE_LABELS[auditSource]} />
+            {auditSource === "list" ? (
+              <ReviewRow label="URLs" value={`${parsedUrls.length} page${parsedUrls.length !== 1 ? "s" : ""}`} />
+            ) : (
+              <ReviewRow label={auditSource === "single" ? "Page URL" : "Website"} value={websiteUrl} mono />
+            )}
+            {auditSource === "domain" && scopePrefix && <ReviewRow label="Scope" value={scopePrefix} mono />}
+            {auditSource === "domain" && <ReviewRow label="Max pages" value={String(maxPages)} />}
             <ReviewRow label="Auth" value={authType === "none" ? "None" : authType} />
             <ReviewRow label="Competitors" value={competitors.length === 0 ? "None added" : competitors.map(c => c.name).join(", ")} />
             <div className="rounded-xl p-4 mt-2" style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)" }}>
               <p className="text-sm" style={{ color: "var(--text-2)" }}>
                 <span style={{ color: "#4f46e5", fontWeight: 500 }}>First run will start immediately</span> after you create the project —
-                your site{competitors.length > 0 ? ` and ${competitors.length} competitor${competitors.length !== 1 ? "s" : ""}` : ""} will be crawled and scored.
+                {auditSource === "single"
+                  ? " this page"
+                  : auditSource === "list"
+                  ? ` these ${parsedUrls.length} URL${parsedUrls.length !== 1 ? "s" : ""}`
+                  : " your site"}
+                {competitors.length > 0 ? ` and ${competitors.length} competitor${competitors.length !== 1 ? "s" : ""}` : ""} will be crawled and scored.
               </p>
             </div>
           </>
