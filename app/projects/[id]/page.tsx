@@ -2,6 +2,9 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { getProjectDetail, refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
 import { getScoresByJob } from "@/lib/db/client";
+import { enqueueScoreBatch } from "@/lib/queue/qstash";
+import { DEFAULT_WEIGHTS } from "@/lib/types";
+import type { DimensionScores } from "@/lib/types";
 import { neon } from "@neondatabase/serverless";
 import TrendChart from "@/components/TrendChart";
 import CompetitorMatrix from "@/components/CompetitorMatrix";
@@ -26,30 +29,55 @@ export default async function ProjectHubPage({
   // Load latest scores for client + each competitor
   const sql = neon(process.env.DATABASE_URL!);
 
-  // -- Self-heal: finalize jobs stuck in 'scoring'/'crawling' whose pages are
-  //    all scored. The score webhook's done-check now keys off row counts, but
-  //    this sweep is a belt-and-suspenders catch for any job that finished
-  //    scoring yet never flipped to 'done' (e.g. a batch that died right before
-  //    its done-check, or a legacy job stranded by the old scored_pages-counter
-  //    bug). Cheap: only touches this project's not-yet-final jobs.
-  const stuckButScored = await sql`
-    SELECT j.id, j.competitor_id
-    FROM audit_jobs j
-    WHERE j.project_id = ${params.id}
-      AND j.status IN ('scoring', 'crawling')
-      AND (SELECT COUNT(*) FROM audit_pages p WHERE p.job_id = j.id) > 0
-      AND (SELECT COUNT(*) FROM page_scores s WHERE s.job_id = j.id)
-          >= (SELECT COUNT(*) FROM audit_pages p WHERE p.job_id = j.id)
+  // -- Self-heal: reconcile jobs stuck in 'scoring'/'crawling' against the
+  //    ACTUAL page_scores rows. Two failure modes are covered:
+  //      (a) fully scored but never flipped to 'done' (counter bug / a batch
+  //          that died right before its done-check) -> finalize now.
+  //      (b) a crawl-claim race left some pages un-dispatched: the last crawl
+  //          batch grabbed the 'scoring' lock and dispatched the pages then in
+  //          the DB while an earlier concurrent batch was still committing more
+  //          pages, so those late pages were never sent to a score_batch and
+  //          the job can never reach "fully scored" on its own -> re-dispatch
+  //          just the un-scored pages. The score webhook's row-count done-check
+  //          then finalizes the job when the last stragglers land.
+  //    Cheap: only touches this project's not-yet-final jobs.
+  const stuckJobs = await sql`
+    SELECT id, competitor_id, weights, updated_at
+    FROM audit_jobs
+    WHERE project_id = ${params.id} AND status IN ('scoring', 'crawling')
   `.catch(() => [] as Record<string, unknown>[]);
-  for (const j of stuckButScored) {
-    await sql`
-      UPDATE audit_jobs SET status = 'done', completed_at = NOW()
-      WHERE id = ${j.id as string} AND status IN ('scoring', 'crawling')
-    `.catch(() => null);
-    if (j.competitor_id) {
-      await refreshCompetitorCache(String(j.competitor_id)).catch(() => null);
+  for (const j of stuckJobs) {
+    const jobId = j.id as string;
+    const pageRows = await sql`SELECT id FROM audit_pages WHERE job_id = ${jobId}`.catch(() => [] as Record<string, unknown>[]);
+    if (pageRows.length === 0) continue; // nothing crawled yet — leave it alone
+    const scoredRows = await sql`SELECT page_id FROM page_scores WHERE job_id = ${jobId}`.catch(() => [] as Record<string, unknown>[]);
+    const scoredSet = new Set(scoredRows.map((r) => String(r.page_id)));
+    const unscored = pageRows.map((p) => String(p.id)).filter((id) => !scoredSet.has(id));
+
+    if (unscored.length === 0) {
+      // (a) fully scored — finalize and refresh the cached score.
+      await sql`
+        UPDATE audit_jobs SET status = 'done', completed_at = NOW()
+        WHERE id = ${jobId} AND status IN ('scoring', 'crawling')
+      `.catch(() => null);
+      if (j.competitor_id) {
+        await refreshCompetitorCache(String(j.competitor_id)).catch(() => null);
+      } else {
+        await refreshProjectCache(params.id).catch(() => null);
+      }
     } else {
-      await refreshProjectCache(params.id).catch(() => null);
+      // (b) orphaned un-scored pages — re-dispatch them. Guard on updated_at so
+      // we don't re-enqueue on every render while a batch is still in flight.
+      const updatedAt = j.updated_at ? new Date(j.updated_at as string).getTime() : 0;
+      if (Date.now() - updatedAt > 90_000) {
+        const weights = { ...DEFAULT_WEIGHTS, ...((j.weights as object) ?? {}) } as DimensionScores;
+        for (let i = 0; i < unscored.length; i += 10) {
+          await enqueueScoreBatch({ jobId, pageIds: unscored.slice(i, i + 10), weights }).catch(() => null);
+        }
+        // Touch the job so the guard above suppresses duplicate dispatches
+        // until this batch has had time to land (or fail and be retried).
+        await sql`UPDATE audit_jobs SET updated_at = NOW() WHERE id = ${jobId}`.catch(() => null);
+      }
     }
   }
 
