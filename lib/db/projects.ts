@@ -4,7 +4,10 @@ import { DEFAULT_WEIGHTS } from "@/lib/types";
 
 function db() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL not set");
-  return neon(process.env.DATABASE_URL);
+  // no-store: prevent Next.js from caching the Neon driver's fetch reads (see
+  // lib/db/client.ts getDb for the full rationale) — otherwise cached snapshots
+  // make finished audits look stuck / show stale scores.
+  return neon(process.env.DATABASE_URL, { fetchOptions: { cache: "no-store" } });
 }
 
 // ── Types ─────────────────────────────────────────────────────

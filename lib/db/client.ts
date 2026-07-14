@@ -17,7 +17,14 @@ function getDb() {
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is not set");
   }
-  return neon(process.env.DATABASE_URL);
+  // `cache: "no-store"` is REQUIRED: the Neon serverless driver issues its
+  // queries via `fetch`, and Next.js's App Router silently caches those fetch
+  // responses in its Data Cache. Without this, reads (e.g. GET /api/audit/[id]
+  // that the live banner polls) keep returning a stale snapshot from early in
+  // the run forever — so a finished job still shows "crawling 1/25" and the
+  // banner spins indefinitely. Segment-level `force-dynamic` does NOT reliably
+  // reach the driver's fetch; this driver-level option is the guaranteed fix.
+  return neon(process.env.DATABASE_URL, { fetchOptions: { cache: "no-store" } });
 }
 
 // ── Jobs ──────────────────────────────────────────────────────
