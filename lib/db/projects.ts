@@ -235,7 +235,15 @@ export async function getCompetitorsByProject(
 
 export async function deleteCompetitor(id: string): Promise<void> {
   const sql = db();
-  await sql`DELETE FROM competitor_configs WHERE id = ${id}`;
+  // audit_jobs.competitor_id references this row with a plain FK (no ON DELETE
+  // CASCADE), so a bare delete throws audit_jobs_competitor_id_fkey once the
+  // competitor has been audited. Remove its jobs first — audit_pages and
+  // page_scores cascade off audit_jobs automatically. Wrapped in a single
+  // transaction so a partial failure can't orphan the jobs.
+  await sql.transaction([
+    sql`DELETE FROM audit_jobs WHERE competitor_id = ${id}`,
+    sql`DELETE FROM competitor_configs WHERE id = ${id}`,
+  ]);
 }
 
 // ── Score history ─────────────────────────────────────────────
