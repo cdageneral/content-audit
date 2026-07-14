@@ -228,9 +228,13 @@ function buildAuthHeaders(
   auth?: DiscoveryOptions["auth"]
 ): Record<string, string> {
   const headers: Record<string, string> = {
+    // Present as a real Chrome browser. Many sites (esp. SEO/marketing agencies
+    // like ignitevisibility.com) return 403/challenge to obvious bot UAs, which
+    // made discovery find 0 URLs and the competitor job fail before crawling.
     "User-Agent":
-      "Mozilla/5.0 (compatible; ContentAuditBot/1.0; +https://github.com/you/ai-content-audit)",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
   };
 
   if (auth?.cookie) {

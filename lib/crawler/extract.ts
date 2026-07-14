@@ -266,8 +266,10 @@ function buildAuthHeaders(
   auth?: ExtractOptions["auth"]
 ): Record<string, string> {
   const headers: Record<string, string> = {
+    // Real Chrome UA (see discover.ts) — the crawl step must match discovery or
+    // a UA-blocking site would pass discovery but return challenges at crawl.
     "User-Agent":
-      "Mozilla/5.0 (compatible; ContentAuditBot/1.0)",
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
     Accept:
       "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
