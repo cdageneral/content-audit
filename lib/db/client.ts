@@ -182,6 +182,19 @@ export async function getScoresByJob(jobId: string): Promise<PageScore[]> {
   return rows.map(rowToScore);
 }
 
+/**
+ * Count the score rows actually persisted for a job. This is the source of
+ * truth for "is this job fully scored?" — unlike the audit_jobs.scored_pages
+ * counter, which is a running tally that can under-count under concurrent
+ * writes and strand a fully-scored job in `scoring` forever (observed live:
+ * 10 scores written but scored_pages read 0).
+ */
+export async function countScoresByJob(jobId: string): Promise<number> {
+  const sql = getDb();
+  const rows = await sql`SELECT COUNT(*)::int AS n FROM page_scores WHERE job_id = ${jobId}`;
+  return (rows[0]?.n as number) ?? 0;
+}
+
 // ── Row mappers ───────────────────────────────────────────────
 
 function rowToJob(r: Record<string, unknown>): AuditJob {
