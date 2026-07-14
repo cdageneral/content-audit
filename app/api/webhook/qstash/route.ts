@@ -20,9 +20,6 @@ import { neon } from "@neondatabase/serverless";
 import type { CrawlBatchMessage, ScoreBatchMessage, DimensionScores } from "@/lib/types";
 import { DEFAULT_WEIGHTS } from "@/lib/types";
 
-// Threshold: if ≥85% of pages crawled, don't wait for the final batch index
-const CRAWL_COMPLETION_THRESHOLD = 0.85;
-
 // ── Block detection ───────────────────────────────────────────
 // A site "blocks" our crawler when it returns an auth/rate-limit/forbidden
 // status, or serves a bot-challenge interstitial (Cloudflare, Incapsula, etc.)
@@ -155,7 +152,8 @@ async function handleCrawlBatch(
   let blockedCount = 0;
   let lastBlockStatus = 0;
 
-  for (const url of urls) {
+  for (let u = 0; u < urls.length; u++) {
+    const url = urls[u];
     try {
       const page = await extractPage(jobId, url, {
         usePlaywright: false,
@@ -182,8 +180,12 @@ async function handleCrawlBatch(
 
     // Early stop scanning: after repeated blocks with nothing getting through,
     // end the plain-fetch pass now (avoids a function timeout) and hand off to
-    // the headless-browser second pass below.
+    // the headless-browser second pass below. Account for the URLs we're
+    // skipping so crawled_pages still reaches total_pages — the scoring-claim
+    // gate below keys off that counter and must not stall on an early break.
     if (okCount === 0 && blockedCount >= 3) {
+      const skipped = urls.length - (u + 1);
+      if (skipped > 0) await incrementJobProgress(jobId, "crawled_pages", skipped);
       console.warn(
         `[crawl] Job ${jobId}: ${blockedCount} blocks, 0 crawled — ending plain-fetch pass, escalating to headless.`
       );
@@ -212,19 +214,23 @@ async function handleCrawlBatch(
   const updatedJob = await getJob(jobId);
   if (!updatedJob || updatedJob.status !== "crawling") return;
 
-  const isLastBatch = batchIndex === totalBatches - 1;
-  const crawlRatio = updatedJob.totalPages > 0
-    ? updatedJob.crawledPages / updatedJob.totalPages
-    : 0;
-  const enoughCrawled = crawlRatio >= CRAWL_COMPLETION_THRESHOLD;
-
-  if (!isLastBatch && !enoughCrawled) {
-    console.log(`[crawl] Batch ${batchIndex + 1}/${totalBatches} done. ${updatedJob.crawledPages}/${updatedJob.totalPages} crawled (${Math.round(crawlRatio * 100)}%) — waiting for more batches.`);
+  // Claim the scoring transition ONLY once every crawl attempt across all
+  // batches has completed — i.e. crawled_pages has reached total_pages. Each
+  // URL bumps crawled_pages in `finally` AFTER its page upsert is awaited, so
+  // when the counter hits the total, every page that will be committed IS
+  // committed. This closes the claim-race where one batch grabbed the 'scoring'
+  // lock and dispatched a partial page set while a concurrent batch was still
+  // writing pages (orphaning the late pages). Replaces the old isLastBatch /
+  // 0.85-ratio early-claim shortcut.
+  const crawlComplete =
+    updatedJob.totalPages > 0 && updatedJob.crawledPages >= updatedJob.totalPages;
+  if (!crawlComplete) {
+    console.log(`[crawl] Batch ${batchIndex + 1}/${totalBatches} done. ${updatedJob.crawledPages}/${updatedJob.totalPages} crawled — waiting for all batches before scoring.`);
     return;
   }
 
-  // Atomically claim the scoring transition — prevents duplicate scoring if
-  // multiple batches finish around the same time
+  // Atomically claim the scoring transition — the winner (only one, via the
+  // WHERE status='crawling' guard) dispatches scoring for every crawled page.
   const sql = neon(process.env.DATABASE_URL!);
   const claimed = await sql`
     UPDATE audit_jobs SET status = 'scoring'
