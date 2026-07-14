@@ -94,26 +94,49 @@ export default function LiveAuditBanner({ initialJobs, projectId }: Props) {
   }, []);
 
   useEffect(() => {
-    const sources: EventSource[] = [];
-    let completedCount = 0;
+    let cancelled = false;
+    const finished = new Set<string>();
     const total = initialJobs.length;
-    initialJobs.forEach((job) => {
-      const es = new EventSource(`/api/audit/${job.id}/progress`);
-      es.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data) as JobProgressState;
-          updateJob(data);
-          if (data.status === "done" || data.status === "failed") {
-            es.close();
-            completedCount++;
-            if (completedCount >= total) setTimeout(() => router.refresh(), 1200);
-          }
-        } catch {}
-      };
-      es.onerror = () => es.close();
-      sources.push(es);
-    });
-    return () => sources.forEach((s) => s.close());
+
+    async function pollOnce() {
+      await Promise.all(
+        initialJobs.map(async (job) => {
+          if (finished.has(job.id)) return;
+          try {
+            const res = await fetch(`/api/audit/${job.id}?t=${Date.now()}`, {
+              cache: "no-store",
+            });
+            if (!res.ok || cancelled) return;
+            const { job: j } = await res.json();
+            if (!j || cancelled) return;
+            updateJob({
+              jobId: j.id,
+              status: j.status,
+              totalPages: j.totalPages,
+              crawledPages: j.crawledPages,
+              scoredPages: j.scoredPages,
+            });
+            if (j.status === "done" || j.status === "failed") {
+              finished.add(job.id);
+              if (finished.size >= total && !cancelled) {
+                setTimeout(() => router.refresh(), 1200);
+              }
+            }
+          } catch {}
+        })
+      );
+    }
+
+    // Poll on a fixed interval instead of an EventSource. The SSE progress
+    // stream was killed by Vercel at 120s, which froze the bar mid-audit and
+    // made finished runs look hung. Polling the (force-dynamic) status route
+    // has no such ceiling and always reflects real backend state.
+    pollOnce();
+    const id = setInterval(pollOnce, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
   }, []);
 
   // Live countdown ticker — runs every second
