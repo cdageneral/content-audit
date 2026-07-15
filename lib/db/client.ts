@@ -27,6 +27,44 @@ function getDb() {
   return neon(process.env.DATABASE_URL, { fetchOptions: { cache: "no-store" } });
 }
 
+// ── Lazy schema patches ───────────────────────────────────────
+// Idempotent DDL applied on demand (there is no migration runner in this
+// deploy pipeline). Memoized per lambda instance so the hot scoring path pays
+// the roundtrip once per cold start; every statement is a no-op after the
+// first ever run.
+let schemaPatched: Promise<void> | null = null;
+
+export function ensureSchemaPatches(): Promise<void> {
+  if (!schemaPatched) {
+    schemaPatched = (async () => {
+      const sql = getDb();
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'
+      `;
+      await sql`
+        CREATE TABLE IF NOT EXISTS gap_briefs (
+          id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          project_id        UUID NOT NULL,
+          competitor_id     UUID NOT NULL,
+          dimension         TEXT NOT NULL,
+          client_job_id     UUID NOT NULL,
+          competitor_job_id UUID NOT NULL,
+          brief             TEXT NOT NULL,
+          model_version     TEXT NOT NULL,
+          created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE (project_id, competitor_id, dimension, client_job_id, competitor_job_id)
+        )
+      `;
+    })().catch((err) => {
+      // Allow a retry on the next call instead of caching the failure forever.
+      schemaPatched = null;
+      throw err;
+    });
+  }
+  return schemaPatched;
+}
+
 // ── Jobs ──────────────────────────────────────────────────────
 
 export async function createJob(input: AuditJobCreate): Promise<AuditJob> {
@@ -149,6 +187,9 @@ export async function getPagesByJob(jobId: string): Promise<{ id: string; url: s
 
 export async function upsertScore(score: PageScore): Promise<void> {
   const sql = getDb();
+  // The evidence column may not exist on databases created before the
+  // evidence-capture feature — patch before the first write needs it.
+  await ensureSchemaPatches();
   // NOTE: page_scores has no UNIQUE constraint on page_id in the live DB, so we
   // cannot use `INSERT ... ON CONFLICT (page_id)` (Postgres throws 42P10 — "no
   // unique or exclusion constraint matching the ON CONFLICT specification",
@@ -162,7 +203,7 @@ export async function upsertScore(score: PageScore): Promise<void> {
       score_core_intent, score_edge_cases, score_implied_questions,
       score_fan_out_queries, score_retrievable, score_extractable,
       score_citable, score_reusable,
-      rationale, overall_score, grade, recommendations, model_version
+      rationale, evidence, overall_score, grade, recommendations, model_version
     ) VALUES (
       ${score.pageId}, ${score.jobId},
       ${score.scores.coreIntent}, ${score.scores.edgeCases},
@@ -170,6 +211,7 @@ export async function upsertScore(score: PageScore): Promise<void> {
       ${score.scores.retrievable}, ${score.scores.extractable},
       ${score.scores.citable}, ${score.scores.reusable},
       ${JSON.stringify(score.rationale)},
+      ${JSON.stringify(score.evidence ?? {})},
       ${score.overallScore}, ${score.grade},
       ${JSON.stringify(score.recommendations)},
       ${score.modelVersion}
@@ -241,6 +283,7 @@ function rowToScore(r: Record<string, unknown>): PageScore {
     url: r.url as string,
     scores,
     rationale: r.rationale as PageScore["rationale"],
+    evidence: (r.evidence as PageScore["evidence"]) ?? {},
     overallScore: r.overall_score as number,
     grade: r.grade as PageScore["grade"],
     recommendations: r.recommendations as Recommendation[],

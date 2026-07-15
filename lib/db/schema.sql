@@ -128,3 +128,24 @@ SELECT
 FROM audit_jobs j
 LEFT JOIN page_scores ps ON ps.job_id = j.id
 GROUP BY j.id;
+
+-- ── Patch: per-dimension evidence quotes (2026-07) ────────────
+-- Applied lazily at runtime by ensureSchemaPatches() in lib/db/client.ts;
+-- kept here for documentation.
+ALTER TABLE page_scores ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}';
+
+-- ── Gap briefs (cached "Explain the gap" analyses) ────────────
+-- One row per (project, competitor, dimension, pair-of-runs). Regenerated
+-- automatically after a new audit run because the job ids change.
+CREATE TABLE IF NOT EXISTS gap_briefs (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_id        UUID NOT NULL,
+  competitor_id     UUID NOT NULL,
+  dimension         TEXT NOT NULL,
+  client_job_id     UUID NOT NULL,
+  competitor_job_id UUID NOT NULL,
+  brief             TEXT NOT NULL,
+  model_version     TEXT NOT NULL,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (project_id, competitor_id, dimension, client_job_id, competitor_job_id)
+);
