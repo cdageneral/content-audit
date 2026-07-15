@@ -220,6 +220,7 @@ export default async function ProjectHubPage({
             competitors={project.competitors}
             competitorScoresMap={latestScoresMap}
             competitorColors={COMPETITOR_COLORS}
+            projectId={params.id}
           />
         </div>
       )}
