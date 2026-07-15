@@ -1,8 +1,10 @@
 "use client";
 
+import { useState } from "react";
 import type { CompetitorConfig } from "@/lib/db/projects";
 import type { PageScore, ScoreDimension } from "@/lib/types";
 import { DIMENSION_LABELS } from "@/lib/types";
+import DimensionDrilldown from "./DimensionDrilldown";
 
 interface Props {
   clientName: string;
@@ -10,6 +12,8 @@ interface Props {
   competitors: CompetitorConfig[];
   competitorScoresMap: Record<string, PageScore[]>;
   competitorColors: string[];
+  /** Enables the drill-down drawer + gap-brief API calls when provided */
+  projectId?: string;
 }
 
 const DIMS: ScoreDimension[] = [
@@ -50,7 +54,10 @@ export default function CompetitorMatrix({
   competitors,
   competitorScoresMap,
   competitorColors,
+  projectId,
 }: Props) {
+  const [active, setActive] = useState<{ dim: ScoreDimension; siteId: string } | null>(null);
+
   const sites = [
     { id: "client", name: clientName, color: "#6366f1", scores: clientScores },
     ...competitors.map(c => ({
@@ -135,10 +142,20 @@ export default function CompetitorMatrix({
                   {siteAvgs.map((s, idx) => {
                     const score = s.dimAvgs[dim];
                     const isWinner = idx === winnerIdx && score != null;
+                    const clickable = score != null;
+                    const isActive = active?.dim === dim && active?.siteId === s.id;
                     return (
                       <td key={s.id}
                         className={isWinner ? "matrix-winner" : ""}
-                        style={{ textAlign: "center" }}>
+                        onClick={clickable ? () => setActive({ dim, siteId: s.id }) : undefined}
+                        title={clickable ? "View the evidence behind this score" : undefined}
+                        style={{
+                          textAlign: "center",
+                          cursor: clickable ? "pointer" : undefined,
+                          boxShadow: isActive ? "inset 0 0 0 2px var(--indigo)" : undefined,
+                          background: isActive ? "rgba(99,102,241,0.08)" : undefined,
+                          borderRadius: isActive ? 8 : undefined,
+                        }}>
                         {score != null ? (
                           <span style={{
                             fontSize: 15,
@@ -186,7 +203,29 @@ export default function CompetitorMatrix({
       {/* Legend note */}
       <div className="px-4 py-3 text-xs" style={{ color: "var(--text-3)", borderTop: "1px solid var(--border)" }}>
         ✦ indicates best score in that dimension · Scores are page-level averages from the latest completed audit run
+        · Click any score to see the evidence behind it
       </div>
+
+      {/* Drill-down drawer */}
+      {active && (() => {
+        const site = sites.find((s) => s.id === active.siteId);
+        if (!site) return null;
+        return (
+          <DimensionDrilldown
+            projectId={projectId}
+            dimension={active.dim}
+            group={DIM_GROUP[active.dim]}
+            siteName={site.name}
+            siteColor={site.color}
+            siteScores={site.scores}
+            competitorId={active.siteId === "client" ? null : active.siteId}
+            clientName={clientName}
+            clientColor="#6366f1"
+            clientScores={clientScores}
+            onClose={() => setActive(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
