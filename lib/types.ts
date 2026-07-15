@@ -148,6 +148,12 @@ export const DIMENSION_GROUPS = {
 
 export type DimensionScores = Record<ScoreDimension, number>;
 export type DimensionRationale = Record<ScoreDimension, string>;
+/**
+ * Optional per-dimension verbatim evidence quotes (1–2 short excerpts from the
+ * page that most influenced the score). Only present on scores produced after
+ * the evidence-capture prompt shipped — older rows have an empty object.
+ */
+export type DimensionEvidence = Partial<Record<ScoreDimension, string[]>>;
 
 export interface ScoreWeights extends Partial<DimensionScores> {}
 
@@ -169,6 +175,8 @@ export interface PageScore {
   url: string;
   scores: DimensionScores;
   rationale: DimensionRationale;
+  /** Verbatim quotes backing each dimension score (absent/empty for pre-evidence runs) */
+  evidence?: DimensionEvidence;
   /** Weighted overall score 0–100 */
   overallScore: number;
   /** Human-readable tier: A/B/C/D/F */
