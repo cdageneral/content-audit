@@ -100,6 +100,21 @@ export default async function ProjectHubPage({
   const clientScores = latestScoresMap["client"] ?? [];
   const hasResults = clientScores.length > 0;
 
+  // Flattened competitor pages for the "Competitors outperforming you" card.
+  const competitorPageEntries = project.competitors.flatMap((c) => {
+    const cs = latestScoresMap[c.id] ?? [];
+    return cs.map((p) => ({
+      competitorName: c.name,
+      color: COMPETITOR_COLORS[c.colorIndex],
+      url: p.url,
+      score: p.overallScore,
+      grade: p.grade,
+    }));
+  });
+
+  // Median letter grade across the client's audited pages.
+  const clientMedianGrade = medianGrade(clientScores);
+
   // In-progress jobs (for status banner)
   // Only jobs created in the last 2 hours to avoid showing stale stuck jobs
   const activeJobs = await sql`
@@ -164,6 +179,14 @@ export default async function ProjectHubPage({
               <div className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>Latest score</div>
             </div>
           )}
+          {clientMedianGrade && (
+            <div className="text-center px-5 py-3 rounded-xl" style={{ background: "var(--bg-1)", border: "1px solid var(--border)" }}>
+              <div className="text-3xl font-bold" style={{ color: gradeColor(clientMedianGrade) }}>
+                {clientMedianGrade}
+              </div>
+              <div className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>Median grade</div>
+            </div>
+          )}
           <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
         </div>
       </div>
@@ -209,6 +232,7 @@ export default async function ProjectHubPage({
             job={{ id: latestJobs[0]?.id as string } as any}
             scores={clientScores}
             summary={computeQuickSummary(clientScores)}
+            competitorPages={competitorPageEntries}
           />
         </div>
       )}
@@ -274,6 +298,20 @@ function scoreColor(s: number) {
   if (s >= 50) return "#d97706";
   if (s >= 35) return "#ea580c";
   return "#dc2626";
+}
+
+function gradeColor(g: string) {
+  return g === "A" ? "#059669" : g === "B" ? "#2563eb" : g === "C" ? "#d97706" : g === "D" ? "#ea580c" : "#dc2626";
+}
+
+function medianGrade(
+  scores: Awaited<ReturnType<typeof getScoresByJob>>
+): "A" | "B" | "C" | "D" | "F" | null {
+  if (!scores.length) return null;
+  const rank: Record<string, number> = { F: 0, D: 1, C: 2, B: 3, A: 4 };
+  const letters = ["F", "D", "C", "B", "A"] as const;
+  const sorted = scores.map((s) => rank[s.grade] ?? 0).sort((a, b) => a - b);
+  return letters[sorted[Math.floor((sorted.length - 1) / 2)]];
 }
 
 function computeQuickSummary(scores: Awaited<ReturnType<typeof getScoresByJob>>) {
