@@ -12,17 +12,38 @@ import {
 import type { AuditJob, PageScore, AuditSummary, ScoreDimension } from "@/lib/types";
 import { DIMENSION_LABELS } from "@/lib/types";
 
+export interface CompetitorPageEntry {
+  competitorName: string;
+  color: string;
+  url: string;
+  score: number;
+  grade: "A" | "B" | "C" | "D" | "F";
+}
+
 interface Props {
   job: AuditJob;
   scores: PageScore[];
   summary: AuditSummary;
+  /** Flattened competitor pages (all competitors) for the "outperforming" card. */
+  competitorPages?: CompetitorPageEntry[];
 }
 
-export default function AuditResults({ job, scores, summary }: Props) {
+export default function AuditResults({ job, scores, summary, competitorPages = [] }: Props) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<"overallScore" | ScoreDimension>("overallScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedPage, setSelectedPage] = useState<PageScore | null>(null);
+
+  // ── Summary-card data (all derived from real audit scores) ──────────────
+  const clientAvg = scores.length
+    ? Math.round(scores.reduce((s, p) => s + p.overallScore, 0) / scores.length)
+    : 0;
+  const strongest = [...scores].sort((a, b) => b.overallScore - a.overallScore).slice(0, 5);
+  const weakest = [...scores].sort((a, b) => a.overallScore - b.overallScore).slice(0, 5);
+  const outperforming = [...competitorPages]
+    .filter((c) => c.score > clientAvg)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5);
 
   const filtered = scores
     .filter((s) => s.url.toLowerCase().includes(search.toLowerCase()))
@@ -119,6 +140,38 @@ export default function AuditResults({ job, scores, summary }: Props) {
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Summary cards: strongest / weakest / competitors outperforming */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <RankCard
+          title="Top 5 Strongest Pages"
+          rows={strongest.map((p) => ({ url: p.url, score: p.overallScore, grade: p.grade }))}
+          onRowClick={(url) => setSelectedPage(scores.find((s) => s.url === url) ?? null)}
+          emptyText="No pages scored yet."
+        />
+        <RankCard
+          title="Top 5 Weakest Pages"
+          rows={weakest.map((p) => ({ url: p.url, score: p.overallScore, grade: p.grade }))}
+          onRowClick={(url) => setSelectedPage(scores.find((s) => s.url === url) ?? null)}
+          emptyText="No pages scored yet."
+        />
+        <RankCard
+          title="Competitors Outperforming You"
+          subtitle={`Beating your avg of ${clientAvg}`}
+          rows={outperforming.map((c) => ({
+            url: c.url,
+            score: c.score,
+            delta: c.score - clientAvg,
+            tag: c.competitorName,
+            tagColor: c.color,
+          }))}
+          emptyText={
+            competitorPages.length === 0
+              ? "No competitor pages to compare yet."
+              : "No competitor pages are beating your average — you're setting the pace."
+          }
+        />
       </div>
 
       {/* Page table */}
@@ -252,6 +305,87 @@ function StatCard({
         {value}
         {sub && <span className="text-sm text-slate-500 ml-1">{sub}</span>}
       </p>
+    </div>
+  );
+}
+
+interface RankRow {
+  url: string;
+  score: number;
+  grade?: "A" | "B" | "C" | "D" | "F";
+  delta?: number;
+  tag?: string;
+  tagColor?: string;
+}
+
+function RankCard({
+  title,
+  subtitle,
+  rows,
+  onRowClick,
+  emptyText,
+}: {
+  title: string;
+  subtitle?: string;
+  rows: RankRow[];
+  onRowClick?: (url: string) => void;
+  emptyText: string;
+}) {
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-4">
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+        {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-xs text-slate-400 py-2">{emptyText}</p>
+      ) : (
+        <div className="space-y-1.5">
+          {rows.map((r, i) => (
+            <div
+              key={`${r.url}-${i}`}
+              onClick={onRowClick ? () => onRowClick(r.url) : undefined}
+              className={`flex items-center gap-2 rounded-lg px-2 py-1.5 ${
+                onRowClick ? "hover:bg-slate-50 cursor-pointer" : ""
+              } transition-colors`}
+            >
+              <span className="text-xs text-slate-400 font-mono w-4 flex-shrink-0">{i + 1}</span>
+              <div className="min-w-0 flex-1">
+                {r.tag && (
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    {r.tagColor && (
+                      <span
+                        className="inline-block w-2 h-2 rounded-full flex-shrink-0"
+                        style={{ background: r.tagColor }}
+                      />
+                    )}
+                    <span className="text-xs font-medium text-slate-600 truncate">{r.tag}</span>
+                  </div>
+                )}
+                <p className="text-xs font-mono text-slate-500 truncate">
+                  {r.url.replace(/^https?:\/\/[^/]+/, "") || r.url}
+                </p>
+              </div>
+              {r.delta != null && (
+                <span className="text-xs font-semibold text-emerald-600 flex-shrink-0">
+                  +{r.delta}
+                </span>
+              )}
+              <span
+                className="text-sm font-bold flex-shrink-0"
+                style={{ color: scoreColor(r.score) }}
+              >
+                {r.score}
+              </span>
+              {r.grade && (
+                <span className={`grade-${r.grade} rounded px-1.5 py-0.5 text-xs font-bold flex-shrink-0`}>
+                  {r.grade}
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
