@@ -101,6 +101,9 @@ Penalize: heavy use of "this", "it", "they" without antecedents, "as mentioned e
 - D: 40–54
 - F: 0–39
 
+## Evidence Quotes
+For each dimension, capture 1–2 SHORT verbatim quotes (each under 150 characters) copied exactly from the page content or metadata that most influenced your score — the strongest proof of why the score is what it is. For high scores quote what the page does well; for low scores quote (or describe in brackets, e.g. "[no author or date anywhere on page]") what drags it down. Never paraphrase — these are shown to users as proof and must be findable on the page.
+
 ## Recommendations
 For each page, generate 2–4 specific, actionable recommendations targeting the lowest-scoring dimensions. Each recommendation must:
 1. Name the specific dimension it addresses
@@ -126,6 +129,7 @@ export const SCORE_TOOL_DEFINITION = {
       "citable",
       "reusable",
       "rationale",
+      "evidence",
       "recommendations",
     ],
     properties: {
@@ -199,6 +203,21 @@ export const SCORE_TOOL_DEFINITION = {
           extractable: { type: "string" },
           citable: { type: "string" },
           reusable: { type: "string" },
+        },
+      },
+      evidence: {
+        type: "object",
+        description:
+          "1–2 short verbatim quotes (<150 chars each) per dimension, copied exactly from the page, that most influenced the score",
+        properties: {
+          coreIntent: { type: "array", items: { type: "string" }, maxItems: 2 },
+          edgeCases: { type: "array", items: { type: "string" }, maxItems: 2 },
+          impliedQuestions: { type: "array", items: { type: "string" }, maxItems: 2 },
+          fanOutQueries: { type: "array", items: { type: "string" }, maxItems: 2 },
+          retrievable: { type: "array", items: { type: "string" }, maxItems: 2 },
+          extractable: { type: "array", items: { type: "string" }, maxItems: 2 },
+          citable: { type: "array", items: { type: "string" }, maxItems: 2 },
+          reusable: { type: "array", items: { type: "string" }, maxItems: 2 },
         },
       },
       recommendations: {

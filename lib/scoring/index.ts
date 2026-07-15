@@ -8,6 +8,7 @@ import type {
   PageScore,
   DimensionScores,
   DimensionRationale,
+  DimensionEvidence,
   Recommendation,
   ScoreDimension,
 } from "@/lib/types";
@@ -43,7 +44,11 @@ export async function scorePage(
 
   const response = await client.messages.create({
     model: SCORING_MODEL,
-    max_tokens: 2048,
+    // 4096: the evidence quotes added to the tool schema can consume ~600
+    // extra output tokens; at 2048 a verbose page could truncate the tool
+    // input mid-JSON, dropping `recommendations` (emitted last) and NULL-
+    // violating page_scores on the webhook hot path.
+    max_tokens: 4096,
     system: SCORING_SYSTEM_PROMPT,
     tools: [SCORE_TOOL_DEFINITION],
     tool_choice: { type: "any" },
@@ -180,8 +185,20 @@ function buildPageScore(
     reusable: clamp(raw.reusable as number),
   };
 
-  const rationale = raw.rationale as DimensionRationale;
-  const recommendations = raw.recommendations as Recommendation[];
+  // Defensive defaults: a truncated tool_use response (max_tokens hit) can
+  // legally omit any late-emitted property. Missing rationale/recommendations
+  // must degrade to empty values, never to `undefined` — JSON.stringify(
+  // undefined) is undefined, which would NULL-violate page_scores' NOT NULL
+  // columns and strand the job in 'scoring' via endless QStash retries.
+  const rationale = (
+    raw.rationale && typeof raw.rationale === "object" ? raw.rationale : {}
+  ) as DimensionRationale;
+  // Evidence is best-effort: older prompts (and occasional model omissions)
+  // won't include it, so default to an empty object and sanitize shape.
+  const evidence = sanitizeEvidence(raw.evidence);
+  const recommendations = (
+    Array.isArray(raw.recommendations) ? raw.recommendations : []
+  ) as Recommendation[];
   const overallScore = computeWeightedScore(scores, weights);
   const grade = scoreToGrade(overallScore);
 
@@ -192,12 +209,28 @@ function buildPageScore(
     url: page.url,
     scores,
     rationale,
+    evidence,
     overallScore,
     grade,
     recommendations,
     modelVersion,
     scoredAt: new Date(),
   };
+}
+
+/** Keep only string-array values, cap 2 quotes per dimension, 200 chars each. */
+function sanitizeEvidence(raw: unknown): DimensionEvidence {
+  if (!raw || typeof raw !== "object") return {};
+  const out: DimensionEvidence = {};
+  for (const [dim, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(val)) continue;
+    const quotes = val
+      .filter((q): q is string => typeof q === "string" && q.trim().length > 0)
+      .slice(0, 2)
+      .map((q) => q.slice(0, 200));
+    if (quotes.length) out[dim as ScoreDimension] = quotes;
+  }
+  return out;
 }
 
 // ── Weighted score ────────────────────────────────────────────
@@ -281,6 +314,7 @@ function zeroScore(page: CrawledPage, pageId: string): PageScore {
     url: page.url,
     scores: zeroScores,
     rationale: zeroRationale,
+    evidence: {},
     overallScore: 0,
     grade: "F",
     recommendations: [],
