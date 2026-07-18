@@ -9,8 +9,28 @@ import {
   ResponsiveContainer,
   Tooltip,
 } from "recharts";
-import type { AuditJob, PageScore, AuditSummary, ScoreDimension } from "@/lib/types";
-import { DIMENSION_LABELS } from "@/lib/types";
+import type {
+  AuditJob,
+  PageScore,
+  AuditSummary,
+  ScoreDimension,
+  IntentBucket,
+} from "@/lib/types";
+import {
+  DIMENSION_LABELS,
+  ALL_BUCKETS,
+  BUCKET_LABELS,
+  BUCKET_DESCRIPTIONS,
+  isAiFetchLikely,
+  AI_FETCH_READINESS_BAR,
+} from "@/lib/types";
+
+const BUCKET_COLORS: Record<IntentBucket, string> = {
+  recency: "#d97706",     // amber — time-sensitive
+  ranking: "#6366f1",     // indigo — best-of lists
+  local: "#059669",       // emerald — location intent
+  comparison: "#0284c7",  // sky — head-to-head
+};
 
 export interface CompetitorPageEntry {
   competitorName: string;
@@ -33,6 +53,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
   const [sortKey, setSortKey] = useState<"overallScore" | ScoreDimension>("overallScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedPage, setSelectedPage] = useState<PageScore | null>(null);
+  const [bucketFilter, setBucketFilter] = useState<IntentBucket | null>(null);
 
   // ── Summary-card data (all derived from real audit scores) ──────────────
   const clientAvg = scores.length
@@ -45,8 +66,25 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
     .sort((a, b) => b.score - a.score)
     .slice(0, 5);
 
+  // ── Intent-bucket data (from LLM classification of page content) ────────
+  const classifiedCount = scores.filter((s) => s.intentBuckets != null).length;
+  const unclassifiedCount = scores.length - classifiedCount;
+  const bucketCounts = Object.fromEntries(
+    ALL_BUCKETS.map((b) => [
+      b,
+      scores.filter((s) => s.intentBuckets?.includes(b)).length,
+    ])
+  ) as Record<IntentBucket, number>;
+  // "Likely to be fetched in an AI answer": fits ≥1 crawl-forcing bucket AND
+  // retrievable/citable readiness clears the bar (see lib/types.ts).
+  const fetchLikely = scores.filter((s) => isAiFetchLikely(s.intentBuckets, s.scores));
+  const fetchPct = scores.length
+    ? Math.round((fetchLikely.length / scores.length) * 100)
+    : 0;
+
   const filtered = scores
     .filter((s) => s.url.toLowerCase().includes(search.toLowerCase()))
+    .filter((s) => (bucketFilter ? s.intentBuckets?.includes(bucketFilter) ?? false : true))
     .sort((a, b) => {
       const va = sortKey === "overallScore" ? a.overallScore : a.scores[sortKey];
       const vb = sortKey === "overallScore" ? b.overallScore : b.scores[sortKey];
@@ -61,7 +99,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
   return (
     <div className="space-y-6">
       {/* Summary row */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <StatCard label="Pages Audited" value={summary.totalPages.toString()} />
         <StatCard
           label="Avg LLM Score"
@@ -74,6 +112,35 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
           value={DIMENSION_LABELS[summary.topIssues[0]?.dimension]}
           sub={`avg ${summary.topIssues[0]?.averageScore}`}
         />
+        {/* AI fetch likelihood: % of pages that fit a crawl-forcing intent
+            bucket AND clear the retrievable/citable readiness bar. */}
+        <div
+          className="rounded-xl border border-slate-200 bg-white p-4"
+          title={`Pages matching a crawl-forcing intent bucket with retrievable/citable average ≥ ${AI_FETCH_READINESS_BAR}`}
+        >
+          <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
+            Likely AI Fetch
+          </p>
+          {classifiedCount === 0 ? (
+            <>
+              <p className="text-2xl font-bold text-slate-300">—</p>
+              <p className="text-xs text-slate-400 mt-0.5">Classify pages to compute</p>
+            </>
+          ) : (
+            <>
+              <p
+                className="text-2xl font-bold"
+                style={{ color: fetchPct >= 50 ? "#059669" : fetchPct >= 25 ? "#d97706" : "#dc2626" }}
+              >
+                {fetchPct}%
+              </p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                {fetchLikely.length} of {scores.length} pages
+                {unclassifiedCount > 0 ? ` · ${unclassifiedCount} unclassified` : ""}
+              </p>
+            </>
+          )}
+        </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">Grades</p>
           <div className="flex gap-2 flex-wrap">
@@ -174,10 +241,86 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
         />
       </div>
 
+      {/* Intent-bucket cards: crawl-forcing query categories */}
+      <div>
+        <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-700">
+              Crawl-Forcing Intent Buckets
+            </h3>
+            <p className="text-xs text-slate-400">
+              Query categories that force AI answer engines to fetch live content — click a
+              bucket to filter the pages below.
+              {classifiedCount > 0 && unclassifiedCount === 0 && " Based on full-content analysis of every page."}
+            </p>
+          </div>
+          {unclassifiedCount > 0 && (
+            <ClassifyButton jobId={job.id} unclassifiedCount={unclassifiedCount} />
+          )}
+        </div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {ALL_BUCKETS.map((b) => {
+            const active = bucketFilter === b;
+            const count = bucketCounts[b];
+            const pct = scores.length ? Math.round((count / scores.length) * 100) : 0;
+            return (
+              <button
+                key={b}
+                onClick={() => setBucketFilter(active ? null : b)}
+                className={`text-left rounded-xl border p-4 transition-all ${
+                  active
+                    ? "border-indigo-400 bg-indigo-50 ring-1 ring-indigo-300"
+                    : "border-slate-200 bg-white hover:border-indigo-200 hover:bg-slate-50"
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: BUCKET_COLORS[b] }}>
+                    {BUCKET_LABELS[b]}
+                  </span>
+                  {active && <span className="text-xs text-indigo-600 font-medium">filtering ×</span>}
+                </div>
+                <p className="text-2xl font-bold text-slate-900">
+                  {count}
+                  <span className="text-sm text-slate-400 font-medium ml-1.5">
+                    {classifiedCount > 0 ? `${pct}%` : ""}
+                  </span>
+                </p>
+                <p className="text-xs text-slate-400 mt-1 leading-snug">
+                  {BUCKET_DESCRIPTIONS[b]}
+                </p>
+              </button>
+            );
+          })}
+        </div>
+        {classifiedCount > 0 && (
+          <p className="text-xs text-slate-400 mt-2">
+            {scores.filter((s) => s.intentBuckets != null && s.intentBuckets.length === 0).length}{" "}
+            page(s) fit no bucket (evergreen/other)
+            {unclassifiedCount > 0 ? ` · ${unclassifiedCount} not yet classified` : ""}. Pages can
+            appear in more than one bucket.
+          </p>
+        )}
+      </div>
+
       {/* Page table */}
       <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
         <div className="p-4 border-b border-slate-200 flex items-center gap-3">
-          <h3 className="text-sm font-semibold text-slate-700 flex-1">All Pages</h3>
+          <h3 className="text-sm font-semibold text-slate-700 flex-1">
+            All Pages
+            {bucketFilter && (
+              <button
+                onClick={() => setBucketFilter(null)}
+                className="ml-2 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium border transition-colors hover:opacity-80"
+                style={{
+                  color: BUCKET_COLORS[bucketFilter],
+                  borderColor: BUCKET_COLORS[bucketFilter],
+                  background: `${BUCKET_COLORS[bucketFilter]}14`,
+                }}
+              >
+                {BUCKET_LABELS[bucketFilter]} · {filtered.length} ×
+              </button>
+            )}
+          </h3>
           <input
             type="text"
             value={search}
@@ -192,6 +335,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
             <thead>
               <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
                 <th className="text-left px-4 py-3">URL</th>
+                <th className="text-left px-2 py-3">Buckets</th>
                 <SortHeader label="Score" field="overallScore" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Intent" field="coreIntent" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Edges" field="edgeCases" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
@@ -211,6 +355,25 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                 >
                   <td className="px-4 py-3 max-w-xs truncate text-slate-700 text-xs font-mono">
                     {page.url.replace(/^https?:\/\/[^/]+/, "")}
+                  </td>
+                  <td className="px-2 py-3">
+                    <div className="flex items-center gap-1">
+                      {page.intentBuckets?.map((b) => (
+                        <span
+                          key={b}
+                          title={`${BUCKET_LABELS[b]}${page.primaryBucket === b ? " (primary)" : ""}`}
+                          className="inline-block rounded-full flex-shrink-0"
+                          style={{
+                            width: page.primaryBucket === b ? 10 : 7,
+                            height: page.primaryBucket === b ? 10 : 7,
+                            background: BUCKET_COLORS[b],
+                          }}
+                        />
+                      ))}
+                      {page.intentBuckets == null && (
+                        <span className="text-xs text-slate-300" title="Not yet classified">–</span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3 font-bold" style={{ color: scoreColor(page.overallScore) }}>
                     {page.overallScore}
@@ -390,6 +553,79 @@ function RankCard({
   );
 }
 
+/**
+ * "Classify pages" backfill button: dispatches classification-only batches
+ * for pages that predate intent bucketing, polls progress, then reloads.
+ */
+function ClassifyButton({
+  jobId,
+  unclassifiedCount,
+}: {
+  jobId: string;
+  unclassifiedCount: number;
+}) {
+  const [state, setState] = useState<"idle" | "running" | "error">("idle");
+  const [progress, setProgress] = useState<string>("");
+
+  async function start() {
+    setState("running");
+    setProgress("Dispatching…");
+    try {
+      const res = await fetch(`/api/audit/${jobId}/classify`, { method: "POST" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { total } = (await res.json()) as { total: number };
+
+      // Poll until every score row is classified (or ~4 min passes), then
+      // reload so the server-rendered cards pick up the new bucket data.
+      const deadline = Date.now() + 240_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 4000));
+        const s = await fetch(`/api/audit/${jobId}/classify?t=${Date.now()}`);
+        if (!s.ok) continue;
+        const { total: t, classified } = (await s.json()) as {
+          total: number;
+          classified: number;
+        };
+        setProgress(`${classified}/${t || total} classified…`);
+        if (t > 0 && classified >= t) break;
+      }
+      window.location.reload();
+    } catch (err) {
+      console.error("[classify] backfill failed:", err);
+      setState("error");
+    }
+  }
+
+  if (state === "error") {
+    return (
+      <button
+        onClick={start}
+        className="rounded-lg border border-red-300 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 transition-colors"
+      >
+        Classification failed — retry
+      </button>
+    );
+  }
+
+  if (state === "running") {
+    return (
+      <span className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-500">
+        <span className="inline-block w-3 h-3 mr-1.5 align-[-2px] rounded-full border-2 border-indigo-500 border-t-transparent animate-spin" />
+        {progress || "Classifying…"}
+      </span>
+    );
+  }
+
+  return (
+    <button
+      onClick={start}
+      className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-500 transition-colors"
+    >
+      Classify {unclassifiedCount} page{unclassifiedCount !== 1 ? "s" : ""}
+    </button>
+  );
+}
+
 function PageDetail({ page, onClose }: { page: PageScore; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -411,6 +647,41 @@ function PageDetail({ page, onClose }: { page: PageScore; onClose: () => void })
             ×
           </button>
         </div>
+
+        {page.intentBuckets != null && (
+          <div className="space-y-2">
+            <h4 className="text-sm font-semibold text-slate-900">Intent Buckets</h4>
+            {page.intentBuckets.length === 0 ? (
+              <p className="text-xs text-slate-500">
+                No crawl-forcing intent detected — evergreen/other content.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {page.intentBuckets.map((b) => (
+                  <div key={b} className="flex items-start gap-2">
+                    <span
+                      className="mt-1 inline-block w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ background: BUCKET_COLORS[b] }}
+                    />
+                    <div className="min-w-0">
+                      <span className="text-xs font-semibold" style={{ color: BUCKET_COLORS[b] }}>
+                        {BUCKET_LABELS[b]}
+                        {page.primaryBucket === b && (
+                          <span className="ml-1.5 text-slate-400 font-normal">primary</span>
+                        )}
+                      </span>
+                      {page.bucketEvidence?.[b] && (
+                        <p className="text-xs text-slate-500 italic">
+                          &ldquo;{page.bucketEvidence[b]}&rdquo;
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="space-y-3">
           {(Object.keys(DIMENSION_LABELS) as ScoreDimension[]).map((dim) => (
