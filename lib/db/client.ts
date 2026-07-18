@@ -42,6 +42,21 @@ export function ensureSchemaPatches(): Promise<void> {
         ALTER TABLE page_scores
         ADD COLUMN IF NOT EXISTS evidence JSONB NOT NULL DEFAULT '{}'
       `;
+      // Intent-bucket classification (crawl-forcing query categories).
+      // intent_buckets: NULL = never classified (backfill candidate);
+      //                 '[]' = classified, matched no bucket (evergreen).
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS intent_buckets JSONB
+      `;
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS primary_bucket TEXT
+      `;
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS bucket_evidence JSONB NOT NULL DEFAULT '{}'
+      `;
       await sql`
         CREATE TABLE IF NOT EXISTS gap_briefs (
           id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -203,7 +218,8 @@ export async function upsertScore(score: PageScore): Promise<void> {
       score_core_intent, score_edge_cases, score_implied_questions,
       score_fan_out_queries, score_retrievable, score_extractable,
       score_citable, score_reusable,
-      rationale, evidence, overall_score, grade, recommendations, model_version
+      rationale, evidence, overall_score, grade, recommendations, model_version,
+      intent_buckets, primary_bucket, bucket_evidence
     ) VALUES (
       ${score.pageId}, ${score.jobId},
       ${score.scores.coreIntent}, ${score.scores.edgeCases},
@@ -214,7 +230,10 @@ export async function upsertScore(score: PageScore): Promise<void> {
       ${JSON.stringify(score.evidence ?? {})},
       ${score.overallScore}, ${score.grade},
       ${JSON.stringify(score.recommendations)},
-      ${score.modelVersion}
+      ${score.modelVersion},
+      ${score.intentBuckets != null ? JSON.stringify(score.intentBuckets) : null},
+      ${score.primaryBucket ?? null},
+      ${JSON.stringify(score.bucketEvidence ?? {})}
     )
   `;
 }
@@ -238,6 +257,73 @@ export async function getScoresByJob(jobId: string): Promise<PageScore[]> {
  * writes and strand a fully-scored job in `scoring` forever (observed live:
  * 10 scores written but scored_pages read 0).
  */
+// ── Intent-bucket classification (backfill path) ──────────────
+
+/**
+ * Write classification onto an existing score row without touching the scores
+ * themselves. Used by the classify_batch backfill for pre-feature rows.
+ */
+export async function updatePageClassification(
+  pageId: string,
+  classification: {
+    intentBuckets: string[];
+    primaryBucket: string | null;
+    bucketEvidence: Record<string, string>;
+  }
+): Promise<void> {
+  const sql = getDb();
+  await ensureSchemaPatches();
+  await sql`
+    UPDATE page_scores SET
+      intent_buckets  = ${JSON.stringify(classification.intentBuckets)},
+      primary_bucket  = ${classification.primaryBucket},
+      bucket_evidence = ${JSON.stringify(classification.bucketEvidence)}
+    WHERE page_id = ${pageId}
+  `;
+}
+
+/**
+ * Score rows for a job that have never been classified (intent_buckets IS
+ * NULL), joined to their page content for the classify-only LLM call.
+ */
+export async function getUnclassifiedPagesForJob(
+  jobId: string
+): Promise<{ id: string; url: string; title: string; bodyText: string }[]> {
+  const sql = getDb();
+  await ensureSchemaPatches();
+  const rows = await sql`
+    SELECT ap.id, ap.url, ap.title, ap.body_text
+    FROM page_scores ps
+    JOIN audit_pages ap ON ap.id = ps.page_id
+    WHERE ps.job_id = ${jobId} AND ps.intent_buckets IS NULL
+  `;
+  return rows.map((r) => ({
+    id: r.id as string,
+    url: r.url as string,
+    title: (r.title as string) ?? "",
+    bodyText: (r.body_text as string) ?? "",
+  }));
+}
+
+/** {total, classified} score-row counts for a job — drives backfill progress. */
+export async function getClassificationStatus(
+  jobId: string
+): Promise<{ total: number; classified: number }> {
+  const sql = getDb();
+  await ensureSchemaPatches();
+  const rows = await sql`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(intent_buckets)::int AS classified
+    FROM page_scores
+    WHERE job_id = ${jobId}
+  `;
+  return {
+    total: (rows[0]?.total as number) ?? 0,
+    classified: (rows[0]?.classified as number) ?? 0,
+  };
+}
+
 export async function countScoresByJob(jobId: string): Promise<number> {
   const sql = getDb();
   const rows = await sql`SELECT COUNT(*)::int AS n FROM page_scores WHERE job_id = ${jobId}`;
@@ -284,6 +370,9 @@ function rowToScore(r: Record<string, unknown>): PageScore {
     scores,
     rationale: r.rationale as PageScore["rationale"],
     evidence: (r.evidence as PageScore["evidence"]) ?? {},
+    intentBuckets: (r.intent_buckets as PageScore["intentBuckets"]) ?? null,
+    primaryBucket: (r.primary_bucket as PageScore["primaryBucket"]) ?? null,
+    bucketEvidence: (r.bucket_evidence as PageScore["bucketEvidence"]) ?? {},
     overallScore: r.overall_score as number,
     grade: r.grade as PageScore["grade"],
     recommendations: r.recommendations as Recommendation[],
