@@ -5,7 +5,7 @@ export const maxDuration = 300;
 import { NextRequest, NextResponse } from "next/server";
 import { verifyQStashSignature } from "@/lib/queue/qstash";
 import { extractPage } from "@/lib/crawler/extract";
-import { scoreBatch } from "@/lib/scoring";
+import { scoreBatch, classifyBatch } from "@/lib/scoring";
 import {
   upsertPage,
   upsertScore,
@@ -14,10 +14,16 @@ import {
   incrementJobProgress,
   countScoresByJob,
   getJob,
+  updatePageClassification,
 } from "@/lib/db/client";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
 import { neon } from "@neondatabase/serverless";
-import type { CrawlBatchMessage, ScoreBatchMessage, DimensionScores } from "@/lib/types";
+import type {
+  CrawlBatchMessage,
+  ScoreBatchMessage,
+  ClassifyBatchMessage,
+  DimensionScores,
+} from "@/lib/types";
 import { DEFAULT_WEIGHTS } from "@/lib/types";
 
 // ── Block detection ───────────────────────────────────────────
@@ -118,6 +124,8 @@ export async function POST(req: NextRequest) {
       await handleCrawlBatch(msg as unknown as CrawlBatchMessage & { type: string });
     } else if (msg.type === "score_batch") {
       await handleScoreBatch(msg as unknown as ScoreBatchMessage & { type: string });
+    } else if (msg.type === "classify_batch") {
+      await handleClassifyBatch(msg as unknown as ClassifyBatchMessage & { type: string });
     } else if (msg.type === "test") {
       console.log("[qstash] Test message received — OK");
     } else {
@@ -276,6 +284,50 @@ async function handleCrawlBatch(
   }
 
   console.log(`[crawl] Job ${jobId}: ${Math.ceil(pages.length / SCORE_BATCH_SIZE)} score batches dispatched for ${pages.length} pages.`);
+}
+
+// ── Classify batch handler (backfill) ─────────────────────────
+// Buckets already-scored pages that predate intent classification. Only
+// touches classification columns — never re-scores. Failed pages stay
+// NULL (unclassified) and can be retried by dispatching backfill again.
+
+async function handleClassifyBatch(
+  msg: ClassifyBatchMessage & { type: string }
+): Promise<void> {
+  const { jobId, pageIds } = msg;
+
+  console.log(`[classify] Job ${jobId}: classifying ${pageIds.length} pages`);
+
+  const allPages = await getPagesByJob(jobId);
+  const pageMap = new Map(allPages.map((p) => [p.id, p]));
+
+  const pagesToClassify = pageIds
+    .map((id) => pageMap.get(id))
+    .filter(Boolean)
+    .map((p) => ({
+      id: p!.id,
+      url: p!.url,
+      bodyText: p!.bodyText ?? "",
+    }));
+
+  if (pagesToClassify.length === 0) {
+    console.warn(`[classify] Job ${jobId}: no matching pages for batch.`);
+    return;
+  }
+
+  const results = await classifyBatch(pagesToClassify);
+
+  for (const [pageId, c] of Array.from(results.entries())) {
+    await updatePageClassification(pageId, {
+      intentBuckets: c.intentBuckets,
+      primaryBucket: c.primaryBucket,
+      bucketEvidence: c.bucketEvidence as Record<string, string>,
+    });
+  }
+
+  console.log(
+    `[classify] Job ${jobId}: ${results.size}/${pagesToClassify.length} pages classified.`
+  );
 }
 
 // ── Score batch handler ───────────────────────────────────────
