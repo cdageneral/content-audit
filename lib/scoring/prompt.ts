@@ -4,6 +4,14 @@
 //  and return structured JSON via tool_use.
 // ─────────────────────────────────────────────────────────────
 
+// Version stamp for the scoring methodology. Bump this whenever the system
+// prompt, tool schema, or scoring-message format changes in ANY way — it is
+// part of the content hash, so bumping forces a fresh score (an explicit,
+// versioned "recalibration") instead of silently reusing scores produced by an
+// older methodology. Leaving it unchanged guarantees unchanged content reuses
+// its stored score byte-for-byte.
+export const PROMPT_VERSION = "2026-07-18.1";
+
 export const SCORING_SYSTEM_PROMPT = `You are an expert content analyst specializing in evaluating web content for LLM readiness — how well a piece of content will perform when processed, retrieved, cited, and used by large language models and AI-powered search systems.
 
 Your job is to score a web page across 8 dimensions. Each score is an integer from 0 to 100. Be calibrated and honest: scores above 85 should be rare and earned. Scores below 30 indicate serious deficiencies. Average well-written content should score 50–70.

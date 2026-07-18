@@ -2,6 +2,7 @@
 //  Scoring Engine — calls Claude with tool_use, returns PageScore
 // ─────────────────────────────────────────────────────────────
 
+import { createHash } from "crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import type {
   CrawledPage,
@@ -20,6 +21,7 @@ import {
   SCORE_TOOL_DEFINITION,
   CLASSIFY_SYSTEM_PROMPT,
   CLASSIFY_TOOL_DEFINITION,
+  PROMPT_VERSION,
 } from "./prompt";
 
 // Bounded client: a per-request network timeout + capped retries so a single
@@ -38,19 +40,48 @@ const PAGE_SCORE_TIMEOUT_MS = 45_000;
 // maxDuration kills it mid-batch (which would drop every in-memory score).
 const BATCH_DEADLINE_MS = 250_000;
 
-const SCORING_MODEL = process.env.SCORING_MODEL ?? "claude-haiku-4-5-20251001";
+// Keep this pinned to a DATED snapshot (never a floating alias like
+// "claude-haiku-4-5") — a silent model upgrade would shift every score with no
+// content change. The model id is part of the content hash below, so an
+// intentional model change correctly invalidates cached scores.
+export const SCORING_MODEL = process.env.SCORING_MODEL ?? "claude-haiku-4-5-20251001";
+
+// ── Content hash: the repeatability contract ──────────────────
+// sha256 over the EXACT model input: the fully built scoring message (page
+// content, metadata, headings, link counts) + system-prompt version + model id
+// + the weights used for the overall score. If none of those changed since a
+// prior run, the stored score is reused verbatim — no model call, no drift.
+export function computeContentHash(
+  page: CrawledPage,
+  weights: DimensionScores
+): string {
+  const basis = JSON.stringify({
+    promptVersion: PROMPT_VERSION,
+    model: SCORING_MODEL,
+    weights,
+    message: buildScoringMessage(page),
+  });
+  return createHash("sha256").update(basis).digest("hex");
+}
 
 // ── Score a single page ───────────────────────────────────────
 
 export async function scorePage(
   page: CrawledPage,
   pageId: string,
-  weights: DimensionScores = DW
+  weights: DimensionScores = DW,
+  contentHash?: string
 ): Promise<PageScore> {
   const userMessage = buildScoringMessage(page);
 
   const response = await client.messages.create({
     model: SCORING_MODEL,
+    // temperature 0: greedy decoding. The API default is 1.0 (full creative
+    // sampling), which re-rolls the scores on every run — unacceptable for an
+    // audit that must be repeatable. 0 minimizes run-to-run variance; the
+    // content-hash reuse path above it is what makes unchanged content
+    // EXACTLY repeatable.
+    temperature: 0,
     // 4096: the evidence quotes added to the tool schema can consume ~600
     // extra output tokens; at 2048 a verbose page could truncate the tool
     // input mid-JSON, dropping `recommendations` (emitted last) and NULL-
@@ -69,7 +100,7 @@ export async function scorePage(
   }
 
   const raw = toolUse.input as Record<string, unknown>;
-  return buildPageScore(raw, page, pageId, weights, SCORING_MODEL);
+  return buildPageScore(raw, page, pageId, weights, SCORING_MODEL, contentHash);
 }
 
 // ── Score a batch of pages (rate-limit aware) ─────────────────
@@ -78,7 +109,8 @@ export async function scoreBatch(
   pages: CrawledPage[],
   pageIds: string[],
   weights: DimensionScores = DW,
-  onProgress?: (pageId: string) => void
+  onProgress?: (pageId: string) => void,
+  contentHashes?: (string | undefined)[]
 ): Promise<PageScore[]> {
   const results: PageScore[] = [];
 
@@ -99,19 +131,35 @@ export async function scoreBatch(
       break;
     }
 
-    try {
-      // Race each page against a hard timeout so one slow/hung call can never
-      // freeze the batch (the original bug: no timeout → permanent stall).
-      const score = await withTimeout(
-        scorePage(pages[i], pageIds[i], weights),
+    // Race each page against a hard timeout so one slow/hung call can never
+    // freeze the batch (the original bug: no timeout → permanent stall).
+    const attempt = () =>
+      withTimeout(
+        scorePage(pages[i], pageIds[i], weights, contentHashes?.[i]),
         PAGE_SCORE_TIMEOUT_MS,
         pages[i].url
       );
-      results.push(score);
+
+    try {
+      results.push(await attempt());
     } catch (err) {
-      console.error(`[scoring] Error scoring ${pages[i].url}:`, err);
-      // Push a zero-score placeholder so we don't block the whole batch
-      results.push(zeroScore(pages[i], pageIds[i]));
+      // One retry before giving up: a transient timeout/blip must not become a
+      // recorded score. (Skip the retry if the batch deadline is close.)
+      console.error(`[scoring] Error scoring ${pages[i].url} (will retry once):`, err);
+      if (Date.now() - batchStart < BATCH_DEADLINE_MS - PAGE_SCORE_TIMEOUT_MS) {
+        try {
+          await sleep(1_000);
+          results.push(await attempt());
+        } catch (err2) {
+          console.error(`[scoring] Retry also failed for ${pages[i].url}:`, err2);
+          // Failed-marker row (model_version='error'): counts toward job
+          // completion but is EXCLUDED from every average and display — a
+          // network blip must never enter a client-facing score.
+          results.push(zeroScore(pages[i], pageIds[i]));
+        }
+      } else {
+        results.push(zeroScore(pages[i], pageIds[i]));
+      }
     } finally {
       // Always advance the counter — failed pages must not stall the pipeline
       onProgress?.(pageIds[i]);
@@ -179,7 +227,8 @@ function buildPageScore(
   page: CrawledPage,
   pageId: string,
   weights: DimensionScores,
-  modelVersion: string
+  modelVersion: string,
+  contentHash?: string
 ): PageScore {
   const scores: DimensionScores = {
     coreIntent: clamp(raw.coreIntent as number),
@@ -225,6 +274,7 @@ function buildPageScore(
     grade,
     recommendations,
     modelVersion,
+    contentHash: contentHash ?? null,
     scoredAt: new Date(),
   };
 }
@@ -378,6 +428,12 @@ export function computeWeightedScore(
 
 // ── Utilities ─────────────────────────────────────────────────
 
+// Plain code-unit comparison (NOT localeCompare, which can differ across ICU
+// builds/locales) — deterministic everywhere.
+function byUrl(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function scoreToGrade(score: number): PageScore["grade"] {
   if (score >= 85) return "A";
   if (score >= 70) return "B";
@@ -452,14 +508,24 @@ function zeroScore(page: CrawledPage, pageId: string): PageScore {
     overallScore: 0,
     grade: "F",
     recommendations: [],
+    // 'error' marks this as a FAILED-SCORING placeholder, not a real F. Every
+    // average, ranking, cache refresh, and the history view filters these out
+    // (model_version <> 'error') — the row exists only so the job-completion
+    // row count still adds up. It carries no content hash, so the page is
+    // scored fresh on the next run instead of the failure being reused.
     modelVersion: "error",
+    contentHash: null,
     scoredAt: new Date(),
   };
 }
 
 // ── Audit summary computation ─────────────────────────────────
 
-export function computeAuditSummary(scores: PageScore[]) {
+export function computeAuditSummary(allScores: PageScore[]) {
+  // Failed-scoring placeholders (model_version='error') are not real scores —
+  // averaging their zeros would let a transient network blip move a site's
+  // grade between runs with no content change.
+  const scores = allScores.filter((s) => s.modelVersion !== "error");
   if (scores.length === 0) {
     return null;
   }
@@ -498,7 +564,11 @@ export function computeAuditSummary(scores: PageScore[]) {
     .sort((a, b) => a.averageScore - b.averageScore)
     .slice(0, 4);
 
-  const sorted = [...scores].sort((a, b) => b.overallScore - a.overallScore);
+  // URL tiebreak: two pages with equal scores must rank identically on every
+  // run — score-only sorting lets ties swap places between renders.
+  const sorted = [...scores].sort(
+    (a, b) => b.overallScore - a.overallScore || byUrl(a.url, b.url)
+  );
   const topPages = sorted.slice(0, 5).map((s) => ({ url: s.url, score: s.overallScore }));
   const bottomPages = sorted
     .slice(-5)
