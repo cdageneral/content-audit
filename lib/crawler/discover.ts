@@ -31,13 +31,21 @@ export async function discoverUrls(opts: DiscoveryOptions): Promise<string[]> {
   // Phase 1: sitemap
   const sitemapUrls = await tryDiscoverFromSitemap(origin, headers, scopePrefix);
   if (sitemapUrls.length > 0) {
-    return sitemapUrls.slice(0, maxPages);
+    // Sort BEFORE capping: sitemap order is CMS-controlled and can shuffle
+    // between fetches, which would silently change WHICH pages get audited on
+    // a capped site. Lexicographic order makes the audited page set a pure
+    // function of the site's URL set.
+    return [...sitemapUrls].sort().slice(0, maxPages);
   }
 
   // Phase 2: recursive BFS
   console.log(`[discover] No sitemap found, falling back to recursive crawl from ${rootUrl}`);
   const bfsUrls = await discoverByBFS(rootUrl, origin, scopePrefix, maxPages, headers);
-  return bfsUrls;
+  // BFS discovery order is race-dependent (5 concurrent fetches) — sort so at
+  // least the resulting page ORDER is stable. Note: for sites larger than
+  // maxPages the discovered SET can still vary between runs; sitemap sites are
+  // fully deterministic.
+  return [...bfsUrls].sort();
 }
 
 // ── Sitemap discovery ─────────────────────────────────────────
