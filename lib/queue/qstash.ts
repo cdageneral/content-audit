@@ -4,7 +4,11 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Client, Receiver } from "@upstash/qstash";
-import type { CrawlBatchMessage, ScoreBatchMessage } from "@/lib/types";
+import type {
+  CrawlBatchMessage,
+  ScoreBatchMessage,
+  ClassifyBatchMessage,
+} from "@/lib/types";
 
 function getClient() {
   if (!process.env.QSTASH_TOKEN) throw new Error("QSTASH_TOKEN not set");
@@ -68,6 +72,20 @@ export async function enqueueScoreBatch(msg: ScoreBatchMessage): Promise<void> {
     body: { type: "score_batch", ...msg },
     retries: 2,
     delay: 2, // 2s delay to let DB writes settle
+  });
+}
+
+// ── Dispatch a classification-only batch (backfill) ───────────
+
+export async function enqueueClassifyBatch(msg: ClassifyBatchMessage): Promise<void> {
+  const client = getClient();
+  const endpoint = `${getBaseUrl()}/api/webhook/qstash`;
+
+  await client.publishJSON({
+    url: endpoint,
+    body: { type: "classify_batch", ...msg },
+    retries: 2,
+    delay: 0,
   });
 }
 
