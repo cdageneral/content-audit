@@ -5,7 +5,7 @@ export const maxDuration = 300;
 import { NextRequest, NextResponse } from "next/server";
 import { verifyQStashSignature } from "@/lib/queue/qstash";
 import { extractPage } from "@/lib/crawler/extract";
-import { scoreBatch, classifyBatch } from "@/lib/scoring";
+import { scoreBatch, classifyBatch, computeContentHash } from "@/lib/scoring";
 import {
   upsertPage,
   upsertScore,
@@ -15,6 +15,8 @@ import {
   countScoresByJob,
   getJob,
   updatePageClassification,
+  findReusableScore,
+  type StoredPage,
 } from "@/lib/db/client";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
 import { neon } from "@neondatabase/serverless";
@@ -23,6 +25,7 @@ import type {
   ScoreBatchMessage,
   ClassifyBatchMessage,
   DimensionScores,
+  CrawledPage,
 } from "@/lib/types";
 import { DEFAULT_WEIGHTS } from "@/lib/types";
 
@@ -354,28 +357,72 @@ async function handleScoreBatch(
     // Don't return early; fall through to the done check below
   }
 
-  const crawledPages = pagesToScore.map((p) => ({
+  // Pass the FULL stored page to the scorer. Previously only body_text +
+  // metadata were forwarded, so every page was scored with an empty title,
+  // "(no headings found)", Word Count 0 and 0 links — starving the
+  // Retrievable/Fan-out dimensions of data the crawler had already saved.
+  const toCrawledPage = (p: StoredPage): CrawledPage => ({
     jobId,
     url: p.url,
-    title: "",
-    metaDescription: "",
-    bodyText: p.bodyText ?? "",
-    wordCount: 0,
-    headings: [],
-    internalLinks: [],
-    externalLinks: [],
+    title: p.title,
+    metaDescription: p.metaDescription,
+    bodyText: p.bodyText,
+    wordCount: p.wordCount,
+    headings: p.headings,
+    internalLinks: p.internalLinks,
+    externalLinks: p.externalLinks,
     metadata: { hasStructuredData: false, ...(p.metadata as object) },
-    httpStatus: 200,
+    httpStatus: p.httpStatus,
     crawledAt: new Date(),
-  }));
+  });
+
+  // ── Determinism gate: reuse before re-scoring ───────────────
+  // For each page, hash the exact scoring input. If an earlier run already
+  // scored the identical input, copy that score verbatim (same numbers, same
+  // rationale, same recommendations) — unchanged content can NEVER drift, and
+  // it costs zero model calls. Only genuinely new/changed content is scored.
+  const needsScoring: { page: CrawledPage; id: string; hash: string }[] = [];
+  let reused = 0;
+
+  for (const p of pagesToScore) {
+    const page = toCrawledPage(p);
+    const hash = computeContentHash(page, weights as DimensionScores);
+    try {
+      const prior = await findReusableScore(p.url, hash);
+      if (prior) {
+        await upsertScore({
+          ...prior,
+          id: crypto.randomUUID(),
+          pageId: p.id,
+          jobId,
+          url: p.url,
+          contentHash: hash,
+          scoredAt: new Date(),
+        });
+        await incrementJobProgress(jobId, "scored_pages");
+        reused++;
+        continue;
+      }
+    } catch (err) {
+      // Reuse is an optimization on top of correctness — on lookup failure,
+      // fall through and score fresh rather than failing the batch.
+      console.error(`[score] reuse lookup failed for ${p.url}:`, err);
+    }
+    needsScoring.push({ page, id: p.id, hash });
+  }
+
+  if (reused > 0) {
+    console.log(`[score] Job ${jobId}: reused ${reused} unchanged page score(s) via content hash.`);
+  }
 
   const pageScoreList = await scoreBatch(
-    crawledPages,
-    pagesToScore.map((p) => p.id),
+    needsScoring.map((c) => c.page),
+    needsScoring.map((c) => c.id),
     weights as DimensionScores,
     async (_pageId) => {
       await incrementJobProgress(jobId, "scored_pages");
-    }
+    },
+    needsScoring.map((c) => c.hash)
   );
 
   for (const score of pageScoreList) {
