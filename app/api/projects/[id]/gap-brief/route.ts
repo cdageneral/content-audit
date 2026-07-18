@@ -128,6 +128,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     const response = await anthropic.messages.create({
       model: BRIEF_MODEL,
       max_tokens: 1200,
+      // temperature 0: the brief is an analytical read of fixed audit data —
+      // same runs in, same brief out (the cache above makes reopening exact;
+      // this keeps fresh generations from re-rolling the narrative).
+      temperature: 0,
       messages: [{ role: "user", content: prompt }],
     });
     const brief = response.content
