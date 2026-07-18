@@ -157,6 +157,60 @@ export type DimensionEvidence = Partial<Record<ScoreDimension, string[]>>;
 
 export interface ScoreWeights extends Partial<DimensionScores> {}
 
+// ── Intent buckets (crawl-forcing query categories) ──────────
+//
+// Categorizes a page by the kind of user query its content answers. All four
+// bucket types force an AI answer engine (ChatGPT search, Perplexity, Google
+// AI Overviews) to fetch live web content rather than answer from training
+// data — which makes pages in these buckets candidates for being retrieved
+// and cited in AI answers.
+
+export type IntentBucket = "recency" | "ranking" | "local" | "comparison";
+
+export const ALL_BUCKETS: IntentBucket[] = [
+  "recency",
+  "ranking",
+  "local",
+  "comparison",
+];
+
+export const BUCKET_LABELS: Record<IntentBucket, string> = {
+  recency: "Recency",
+  ranking: "Ranking",
+  local: "Local",
+  comparison: "Comparison",
+};
+
+export const BUCKET_DESCRIPTIONS: Record<IntentBucket, string> = {
+  recency: "Point-in-time content — rates, prices, \"best of {year}\", news. Forces a live crawl.",
+  ranking: "Best-of / top-N positioning content that answers rank-style queries.",
+  local: "Location-based intent — \"near me\", city or region-specific services.",
+  comparison: "Head-to-head product or service comparisons (X vs Y).",
+};
+
+/** Per-bucket short evidence quote explaining why the page fits that bucket. */
+export type BucketEvidence = Partial<Record<IntentBucket, string>>;
+
+/**
+ * Minimum retrievable/citable average for a bucketed page to count as
+ * "likely to be fetched in an AI answer": the intent type forces a crawl,
+ * and the page's own retrieval readiness clears the bar.
+ */
+export const AI_FETCH_READINESS_BAR = 60;
+
+/**
+ * True when a page both matches a crawl-forcing intent bucket AND is
+ * retrieval-ready enough to plausibly be selected for the answer.
+ */
+export function isAiFetchLikely(
+  intentBuckets: IntentBucket[] | null | undefined,
+  scores: DimensionScores
+): boolean {
+  if (!intentBuckets || intentBuckets.length === 0) return false;
+  const readiness = (scores.retrievable + scores.citable) / 2;
+  return readiness >= AI_FETCH_READINESS_BAR;
+}
+
 export const DEFAULT_WEIGHTS: DimensionScores = {
   coreIntent: 0.15,
   edgeCases: 0.10,
@@ -177,6 +231,16 @@ export interface PageScore {
   rationale: DimensionRationale;
   /** Verbatim quotes backing each dimension score (absent/empty for pre-evidence runs) */
   evidence?: DimensionEvidence;
+  /**
+   * Crawl-forcing intent buckets this page's content fits (multi-label).
+   * `null` = page has never been classified (pre-feature rows awaiting
+   * backfill); `[]` = classified and matched none (evergreen/other).
+   */
+  intentBuckets?: IntentBucket[] | null;
+  /** Dominant bucket when multiple apply; null when unclassified or none fit. */
+  primaryBucket?: IntentBucket | null;
+  /** Short per-bucket evidence for why the content fits each assigned bucket. */
+  bucketEvidence?: BucketEvidence;
   /** Weighted overall score 0–100 */
   overallScore: number;
   /** Human-readable tier: A/B/C/D/F */
@@ -233,4 +297,10 @@ export interface ScoreBatchMessage {
   jobId: string;
   pageIds: string[];
   weights: DimensionScores;
+}
+
+/** Classification-only backfill batch: bucket already-scored pages without re-scoring. */
+export interface ClassifyBatchMessage {
+  jobId: string;
+  pageIds: string[];
 }
