@@ -11,9 +11,16 @@ import type {
   DimensionEvidence,
   Recommendation,
   ScoreDimension,
+  IntentBucket,
+  BucketEvidence,
 } from "@/lib/types";
-import { DEFAULT_WEIGHTS as DW } from "@/lib/types";
-import { SCORING_SYSTEM_PROMPT, SCORE_TOOL_DEFINITION } from "./prompt";
+import { DEFAULT_WEIGHTS as DW, ALL_BUCKETS } from "@/lib/types";
+import {
+  SCORING_SYSTEM_PROMPT,
+  SCORE_TOOL_DEFINITION,
+  CLASSIFY_SYSTEM_PROMPT,
+  CLASSIFY_TOOL_DEFINITION,
+} from "./prompt";
 
 // Bounded client: a per-request network timeout + capped retries so a single
 // slow/hung Anthropic call can never block a whole scoring batch indefinitely.
@@ -201,6 +208,7 @@ function buildPageScore(
   ) as Recommendation[];
   const overallScore = computeWeightedScore(scores, weights);
   const grade = scoreToGrade(overallScore);
+  const classification = sanitizeClassification(raw);
 
   return {
     id: crypto.randomUUID(),
@@ -210,12 +218,133 @@ function buildPageScore(
     scores,
     rationale,
     evidence,
+    intentBuckets: classification.intentBuckets,
+    primaryBucket: classification.primaryBucket,
+    bucketEvidence: classification.bucketEvidence,
     overallScore,
     grade,
     recommendations,
     modelVersion,
     scoredAt: new Date(),
   };
+}
+
+// ── Intent-bucket classification ─────────────────────────────
+
+export interface PageClassification {
+  intentBuckets: IntentBucket[];
+  primaryBucket: IntentBucket | null;
+  bucketEvidence: BucketEvidence;
+}
+
+/**
+ * Validate the model's bucket output. Unknown bucket names are dropped; the
+ * primary is coerced into the assigned set (falling back to the first bucket)
+ * so the UI can always trust `primaryBucket ∈ intentBuckets || null`.
+ */
+function sanitizeClassification(raw: Record<string, unknown>): PageClassification {
+  const isBucket = (v: unknown): v is IntentBucket =>
+    typeof v === "string" && (ALL_BUCKETS as string[]).includes(v);
+
+  const intentBuckets = (Array.isArray(raw.intentBuckets)
+    ? raw.intentBuckets.filter(isBucket)
+    : []) as IntentBucket[];
+  // De-dupe while preserving order (no Set spread — tsconfig targets es5)
+  const unique = intentBuckets.filter((b, i) => intentBuckets.indexOf(b) === i);
+
+  let primaryBucket: IntentBucket | null = null;
+  if (unique.length > 0) {
+    primaryBucket = isBucket(raw.primaryBucket) && unique.includes(raw.primaryBucket)
+      ? raw.primaryBucket
+      : unique[0];
+  }
+
+  const bucketEvidence: BucketEvidence = {};
+  if (raw.bucketEvidence && typeof raw.bucketEvidence === "object") {
+    for (const [k, v] of Object.entries(raw.bucketEvidence as Record<string, unknown>)) {
+      if (isBucket(k) && unique.includes(k) && typeof v === "string" && v.trim()) {
+        bucketEvidence[k] = v.slice(0, 200);
+      }
+    }
+  }
+
+  return { intentBuckets: unique, primaryBucket, bucketEvidence };
+}
+
+/**
+ * Classification-only call for the backfill path: buckets an already-scored
+ * page without re-running the full 8-dimension score (cheaper + leaves the
+ * existing scores untouched).
+ */
+export async function classifyPage(page: {
+  url: string;
+  title?: string;
+  bodyText: string;
+}): Promise<PageClassification> {
+  const bodyExcerpt = page.bodyText.slice(0, 12_000);
+  const userMessage = `Classify the following web page into intent buckets.
+
+URL: ${page.url}
+${page.title ? `Title: ${page.title}` : ""}
+
+## Page Content
+${bodyExcerpt}${page.bodyText.length > 12_000 ? "\n\n[Content truncated at 12,000 characters]" : ""}
+
+---
+Call the record_intent_buckets tool with your classification.`;
+
+  const response = await client.messages.create({
+    model: SCORING_MODEL,
+    max_tokens: 1024,
+    system: CLASSIFY_SYSTEM_PROMPT,
+    tools: [CLASSIFY_TOOL_DEFINITION],
+    tool_choice: { type: "any" },
+    messages: [{ role: "user", content: userMessage }],
+  });
+
+  const toolUse = response.content.find((b) => b.type === "tool_use");
+  if (!toolUse || toolUse.type !== "tool_use") {
+    throw new Error(`Classification failed for ${page.url}: no tool_use in response`);
+  }
+  return sanitizeClassification(toolUse.input as Record<string, unknown>);
+}
+
+// Per-page ceiling for a classification call (smaller than scoring — the
+// output is tiny) and the same batch deadline guard as scoring.
+const PAGE_CLASSIFY_TIMEOUT_MS = 30_000;
+
+/**
+ * Classify a batch of pages. Failed pages resolve to `null` (left unclassified
+ * so a later backfill run can retry them) rather than a fake empty result.
+ */
+export async function classifyBatch(
+  pages: { id: string; url: string; title?: string; bodyText: string }[]
+): Promise<Map<string, PageClassification>> {
+  const results = new Map<string, PageClassification>();
+  const batchStart = Date.now();
+
+  for (let i = 0; i < pages.length; i++) {
+    if (Date.now() - batchStart > BATCH_DEADLINE_MS) {
+      console.warn(
+        `[classify] Batch deadline hit after ${i}/${pages.length} pages — leaving remainder unclassified.`
+      );
+      break;
+    }
+    try {
+      const c = await withTimeout(
+        classifyPage(pages[i]),
+        PAGE_CLASSIFY_TIMEOUT_MS,
+        pages[i].url
+      );
+      results.set(pages[i].id, c);
+    } catch (err) {
+      console.error(`[classify] Error classifying ${pages[i].url}:`, err);
+      // Skip — page stays unclassified (intent_buckets NULL) and is retryable.
+    }
+    if (i < pages.length - 1) await sleep(300);
+  }
+
+  return results;
 }
 
 /** Keep only string-array values, cap 2 quotes per dimension, 200 chars each. */
@@ -315,6 +444,11 @@ function zeroScore(page: CrawledPage, pageId: string): PageScore {
     scores: zeroScores,
     rationale: zeroRationale,
     evidence: {},
+    // null (not []) — the page was never actually classified, so the backfill
+    // path can pick it up later instead of treating it as "matched no buckets".
+    intentBuckets: null,
+    primaryBucket: null,
+    bucketEvidence: {},
     overallScore: 0,
     grade: "F",
     recommendations: [],

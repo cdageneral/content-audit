@@ -104,6 +104,24 @@ Penalize: heavy use of "this", "it", "they" without antecedents, "as mentioned e
 ## Evidence Quotes
 For each dimension, capture 1–2 SHORT verbatim quotes (each under 150 characters) copied exactly from the page content or metadata that most influenced your score — the strongest proof of why the score is what it is. For high scores quote what the page does well; for low scores quote (or describe in brackets, e.g. "[no author or date anywhere on page]") what drags it down. Never paraphrase — these are shown to users as proof and must be findable on the page.
 
+## Intent Buckets (crawl-forcing query categories)
+Separately from the scores, classify the page into ZERO OR MORE of these four intent buckets. Each bucket represents a category of user query that forces an AI answer engine (ChatGPT search, Perplexity, Google AI Overviews) to fetch live web content instead of answering from training data. Judge by what the ARTICLE CONTENT actually covers and the query it answers — NOT just the title or headline. A page whose headline is generic can still fit a bucket if the body content answers a recency/ranking/local/comparison query (it just needs optimization); equally, a clickbait "top 10" title over generic body content does NOT earn the ranking bucket.
+
+**recency** — The content answers a point-in-time question where the answer changes over time: today's/current rates or prices, "best X of {year}", availability, news, seasonal or dated information. Test: would the correct answer be different a year from now, forcing a fresh crawl? Evergreen how-to or definitional content does NOT qualify merely because it mentions a date.
+
+**ranking** — The content positions items in an ordered or best-of list answering a rank-style query: "top 5 mountain bikes for downhill", "best travel credit cards". The body must actually rank, rate, or shortlist multiple options. A page about one product is not a ranking page.
+
+**local** — The content targets location-based intent: "best barbers near me", "deep dish pizza in Chicago", city/region/neighborhood-specific services, stores, or recommendations. The content must be tied to a geographic area, not merely mention a place in passing.
+
+**comparison** — The content compares two or more specific named products, services, or brands head-to-head on features, benefits, price, or reviews: "Harley vs Indian", "is the Capital One travel card better than Amex". A features list for a single product is not a comparison.
+
+Rules:
+- A page may legitimately fit multiple buckets ("Top 5 sports cars of 2026" = ranking + recency). Assign every bucket that genuinely applies.
+- If any buckets apply, set primaryBucket to the single DOMINANT one — the query category the page most centrally answers.
+- If none apply (evergreen guides, glossaries, product pages, company pages), assign an empty list and set primaryBucket to "none".
+- For each assigned bucket, provide one short verbatim quote (<150 chars) from the page content proving the fit, in bucketEvidence.
+- Be honest and calibrated: do not stretch content into a bucket it only tangentially touches.
+
 ## Recommendations
 For each page, generate 2–4 specific, actionable recommendations targeting the lowest-scoring dimensions. Each recommendation must:
 1. Name the specific dimension it addresses
@@ -112,6 +130,71 @@ For each page, generate 2–4 specific, actionable recommendations targeting the
 4. Indicate priority: critical (score < 30), high (30–49), medium (50–64), low (65+)
 
 Be specific. "Add an H1 heading that contains the primary keyword" is good. "Improve your content" is useless.`;
+
+// ─────────────────────────────────────────────────────────────
+//  Classification-only prompt — used by the backfill path to bucket
+//  already-scored pages without paying for a full re-score.
+// ─────────────────────────────────────────────────────────────
+
+export const CLASSIFY_SYSTEM_PROMPT = `You are an expert content analyst. Classify a web page into ZERO OR MORE of four intent buckets. Each bucket represents a category of user query that forces an AI answer engine (ChatGPT search, Perplexity, Google AI Overviews) to fetch live web content instead of answering from training data.
+
+Judge by what the ARTICLE CONTENT actually covers and the query it answers — NOT just the title or headline. A page whose headline is generic can still fit a bucket if the body content answers a recency/ranking/local/comparison query (it just needs optimization); equally, a clickbait "top 10" title over generic body content does NOT earn the ranking bucket.
+
+**recency** — The content answers a point-in-time question where the answer changes over time: today's/current rates or prices, "best X of {year}", availability, news, seasonal or dated information. Test: would the correct answer be different a year from now, forcing a fresh crawl? Evergreen how-to or definitional content does NOT qualify merely because it mentions a date.
+
+**ranking** — The content positions items in an ordered or best-of list answering a rank-style query: "top 5 mountain bikes for downhill", "best travel credit cards". The body must actually rank, rate, or shortlist multiple options. A page about one product is not a ranking page.
+
+**local** — The content targets location-based intent: "best barbers near me", "deep dish pizza in Chicago", city/region/neighborhood-specific services, stores, or recommendations. The content must be tied to a geographic area, not merely mention a place in passing.
+
+**comparison** — The content compares two or more specific named products, services, or brands head-to-head on features, benefits, price, or reviews: "Harley vs Indian", "is the Capital One travel card better than Amex". A features list for a single product is not a comparison.
+
+Rules:
+- A page may legitimately fit multiple buckets ("Top 5 sports cars of 2026" = ranking + recency). Assign every bucket that genuinely applies.
+- If any buckets apply, set primaryBucket to the single DOMINANT one — the query category the page most centrally answers.
+- If none apply (evergreen guides, glossaries, product pages, company pages), assign an empty list and set primaryBucket to "none".
+- For each assigned bucket, provide one short verbatim quote (<150 chars) from the page content proving the fit, in bucketEvidence.
+- Be honest and calibrated: do not stretch content into a bucket it only tangentially touches.
+
+Call the record_intent_buckets tool with your classification.`;
+
+export const CLASSIFY_TOOL_DEFINITION = {
+  name: "record_intent_buckets",
+  description:
+    "Record which crawl-forcing intent buckets a web page's content fits",
+  input_schema: {
+    type: "object" as const,
+    required: ["intentBuckets", "primaryBucket"],
+    properties: {
+      intentBuckets: {
+        type: "array",
+        description:
+          "All crawl-forcing intent buckets the page content genuinely fits (empty array if none)",
+        items: {
+          type: "string",
+          enum: ["recency", "ranking", "local", "comparison"],
+        },
+        maxItems: 4,
+      },
+      primaryBucket: {
+        type: "string",
+        enum: ["recency", "ranking", "local", "comparison", "none"],
+        description:
+          "The single dominant bucket, or 'none' if intentBuckets is empty",
+      },
+      bucketEvidence: {
+        type: "object",
+        description:
+          "One short verbatim quote (<150 chars) per assigned bucket proving the fit",
+        properties: {
+          recency: { type: "string" },
+          ranking: { type: "string" },
+          local: { type: "string" },
+          comparison: { type: "string" },
+        },
+      },
+    },
+  },
+};
 
 export const SCORE_TOOL_DEFINITION = {
   name: "record_content_scores",
@@ -130,6 +213,8 @@ export const SCORE_TOOL_DEFINITION = {
       "reusable",
       "rationale",
       "evidence",
+      "intentBuckets",
+      "primaryBucket",
       "recommendations",
     ],
     properties: {
@@ -218,6 +303,33 @@ export const SCORE_TOOL_DEFINITION = {
           extractable: { type: "array", items: { type: "string" }, maxItems: 2 },
           citable: { type: "array", items: { type: "string" }, maxItems: 2 },
           reusable: { type: "array", items: { type: "string" }, maxItems: 2 },
+        },
+      },
+      intentBuckets: {
+        type: "array",
+        description:
+          "All crawl-forcing intent buckets the page content genuinely fits (empty array if none)",
+        items: {
+          type: "string",
+          enum: ["recency", "ranking", "local", "comparison"],
+        },
+        maxItems: 4,
+      },
+      primaryBucket: {
+        type: "string",
+        enum: ["recency", "ranking", "local", "comparison", "none"],
+        description:
+          "The single dominant bucket, or 'none' if intentBuckets is empty",
+      },
+      bucketEvidence: {
+        type: "object",
+        description:
+          "One short verbatim quote (<150 chars) per assigned bucket proving the fit",
+        properties: {
+          recency: { type: "string" },
+          ranking: { type: "string" },
+          local: { type: "string" },
+          comparison: { type: "string" },
         },
       },
       recommendations: {
