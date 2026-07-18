@@ -57,6 +57,44 @@ export function ensureSchemaPatches(): Promise<void> {
         ALTER TABLE page_scores
         ADD COLUMN IF NOT EXISTS bucket_evidence JSONB NOT NULL DEFAULT '{}'
       `;
+      // content_hash: sha256 of the exact scoring input. Identical hash on a
+      // later run ⇒ the stored score is copied verbatim instead of re-calling
+      // the model — the determinism/repeatability guarantee.
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS content_hash TEXT
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_page_scores_content_hash
+        ON page_scores(content_hash)
+      `;
+      // Recreate the trend view so failed-scoring placeholder rows
+      // (model_version='error') can no longer drag historical averages —
+      // a transient blip must not move a chart.
+      await sql`
+        CREATE OR REPLACE VIEW project_score_history AS
+        SELECT
+          j.project_id,
+          j.competitor_id,
+          j.id              AS job_id,
+          j.completed_at    AS run_at,
+          ROUND(AVG(ps.overall_score))           AS avg_score,
+          ROUND(AVG(ps.score_core_intent))       AS avg_core_intent,
+          ROUND(AVG(ps.score_edge_cases))        AS avg_edge_cases,
+          ROUND(AVG(ps.score_implied_questions)) AS avg_implied_questions,
+          ROUND(AVG(ps.score_fan_out_queries))   AS avg_fan_out_queries,
+          ROUND(AVG(ps.score_retrievable))       AS avg_retrievable,
+          ROUND(AVG(ps.score_extractable))       AS avg_extractable,
+          ROUND(AVG(ps.score_citable))           AS avg_citable,
+          ROUND(AVG(ps.score_reusable))          AS avg_reusable,
+          COUNT(ps.id)                           AS pages_scored
+        FROM audit_jobs j
+        JOIN page_scores ps ON ps.job_id = j.id
+        WHERE j.status = 'done' AND j.project_id IS NOT NULL
+          AND ps.model_version <> 'error'
+        GROUP BY j.project_id, j.competitor_id, j.id, j.completed_at
+        ORDER BY j.completed_at ASC
+      `;
       await sql`
         CREATE TABLE IF NOT EXISTS gap_briefs (
           id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -185,16 +223,45 @@ export async function upsertPage(page: CrawledPage): Promise<string> {
   return rows[0].id as string;
 }
 
-export async function getPagesByJob(jobId: string): Promise<{ id: string; url: string; bodyText: string; metadata: Record<string, unknown> }[]> {
+export interface StoredPage {
+  id: string;
+  url: string;
+  title: string;
+  metaDescription: string;
+  bodyText: string;
+  wordCount: number;
+  headings: { level: number; text: string }[];
+  internalLinks: string[];
+  externalLinks: string[];
+  metadata: Record<string, unknown>;
+  httpStatus: number;
+}
+
+export async function getPagesByJob(jobId: string): Promise<StoredPage[]> {
   const sql = getDb();
+  // Full column set: scoring previously read only body_text + metadata, so the
+  // model was scoring every page with an empty title, "(no headings found)",
+  // Word Count 0 and 0 links — blinding the Retrievable/Fan-out dimensions to
+  // data the crawler had already stored.
+  // ORDER BY url: deterministic batch composition run-to-run.
   const rows = await sql`
-    SELECT id, url, body_text, metadata FROM audit_pages WHERE job_id = ${jobId}
+    SELECT id, url, title, meta_description, body_text, word_count,
+           headings, internal_links, external_links, metadata, http_status
+    FROM audit_pages WHERE job_id = ${jobId}
+    ORDER BY url ASC
   `;
   return rows.map((r) => ({
     id: r.id as string,
     url: r.url as string,
-    bodyText: r.body_text as string,
-    metadata: r.metadata as Record<string, unknown>,
+    title: (r.title as string) ?? "",
+    metaDescription: (r.meta_description as string) ?? "",
+    bodyText: (r.body_text as string) ?? "",
+    wordCount: (r.word_count as number) ?? 0,
+    headings: (r.headings as { level: number; text: string }[]) ?? [],
+    internalLinks: (r.internal_links as string[]) ?? [],
+    externalLinks: (r.external_links as string[]) ?? [],
+    metadata: (r.metadata as Record<string, unknown>) ?? {},
+    httpStatus: (r.http_status as number) ?? 200,
   }));
 }
 
@@ -219,7 +286,8 @@ export async function upsertScore(score: PageScore): Promise<void> {
       score_fan_out_queries, score_retrievable, score_extractable,
       score_citable, score_reusable,
       rationale, evidence, overall_score, grade, recommendations, model_version,
-      intent_buckets, primary_bucket, bucket_evidence
+      intent_buckets, primary_bucket, bucket_evidence,
+      content_hash
     ) VALUES (
       ${score.pageId}, ${score.jobId},
       ${score.scores.coreIntent}, ${score.scores.edgeCases},
@@ -233,21 +301,54 @@ export async function upsertScore(score: PageScore): Promise<void> {
       ${score.modelVersion},
       ${score.intentBuckets != null ? JSON.stringify(score.intentBuckets) : null},
       ${score.primaryBucket ?? null},
-      ${JSON.stringify(score.bucketEvidence ?? {})}
+      ${JSON.stringify(score.bucketEvidence ?? {})},
+      ${score.contentHash ?? null}
     )
   `;
 }
 
 export async function getScoresByJob(jobId: string): Promise<PageScore[]> {
   const sql = getDb();
+  // model_version <> 'error': failed-scoring placeholders are bookkeeping rows
+  // (they make the completion count add up) — never real scores. Excluding
+  // them here keeps every consumer (summaries, cards, matrix, gap briefs)
+  // clean without each one re-implementing the filter.
+  // url ASC tiebreak: equal scores must order identically on every read.
   const rows = await sql`
     SELECT ps.*, ap.url
     FROM page_scores ps
     JOIN audit_pages ap ON ap.id = ps.page_id
     WHERE ps.job_id = ${jobId}
-    ORDER BY ps.overall_score DESC
+      AND ps.model_version <> 'error'
+    ORDER BY ps.overall_score DESC, ap.url ASC
   `;
   return rows.map(rowToScore);
+}
+
+/**
+ * Determinism guarantee: find the most recent successful score for the same
+ * URL whose content hash matches the exact scoring input we are about to send.
+ * A hit means nothing relevant changed (content, metadata, prompt version,
+ * model, weights) — so the stored score, rationale, evidence, and
+ * recommendations are reused byte-for-byte instead of re-rolling the model.
+ */
+export async function findReusableScore(
+  url: string,
+  contentHash: string
+): Promise<PageScore | null> {
+  const sql = getDb();
+  await ensureSchemaPatches();
+  const rows = await sql`
+    SELECT ps.*, ap.url
+    FROM page_scores ps
+    JOIN audit_pages ap ON ap.id = ps.page_id
+    WHERE ap.url = ${url}
+      AND ps.content_hash = ${contentHash}
+      AND ps.model_version <> 'error'
+    ORDER BY ps.scored_at DESC
+    LIMIT 1
+  `;
+  return rows[0] ? rowToScore(rows[0]) : null;
 }
 
 /**
@@ -377,6 +478,7 @@ function rowToScore(r: Record<string, unknown>): PageScore {
     grade: r.grade as PageScore["grade"],
     recommendations: r.recommendations as Recommendation[],
     modelVersion: r.model_version as string,
+    contentHash: (r.content_hash as string | null) ?? null,
     scoredAt: new Date(r.scored_at as string),
   };
 }

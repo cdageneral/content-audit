@@ -159,6 +159,8 @@ export async function refreshProjectCache(projectId: string): Promise<void> {
   const sql = db();
 
   // Get the two most recent completed runs for the client site
+  // model_version <> 'error': failed-scoring placeholders must not drag the
+  // cached headline score (a transient blip is not a content change).
   const runs = await sql`
     SELECT j.id, ROUND(AVG(ps.overall_score)) AS avg_score
     FROM audit_jobs j
@@ -166,6 +168,7 @@ export async function refreshProjectCache(projectId: string): Promise<void> {
     WHERE j.project_id = ${projectId}
       AND j.competitor_id IS NULL
       AND j.status = 'done'
+      AND ps.model_version <> 'error'
     GROUP BY j.id, j.completed_at
     ORDER BY j.completed_at DESC
     LIMIT 2
@@ -199,6 +202,7 @@ export async function refreshCompetitorCache(
     FROM audit_jobs j
     JOIN page_scores ps ON ps.job_id = j.id
     WHERE j.competitor_id = ${competitorId} AND j.status = 'done'
+      AND ps.model_version <> 'error'
     GROUP BY j.id, j.completed_at
     ORDER BY j.completed_at DESC
     LIMIT 2
