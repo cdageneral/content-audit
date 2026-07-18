@@ -100,6 +100,12 @@ export default async function ProjectHubPage({
   const clientScores = latestScoresMap["client"] ?? [];
   const hasResults = clientScores.length > 0;
 
+  // The CLIENT's latest done job. latestJobs[0] is NOT reliable here — the
+  // DISTINCT ON ordering sorts competitor jobs first, and the classify
+  // backfill button posts to /api/audit/[jobId]/classify with this id, so it
+  // must be the client job (previously it was only used as a React key).
+  const clientJobId = (latestJobs.find((j) => !j.competitor_id)?.id ?? latestJobs[0]?.id) as string;
+
   // Flattened competitor pages for the "Competitors outperforming you" card.
   const competitorPageEntries = project.competitors.flatMap((c) => {
     const cs = latestScoresMap[c.id] ?? [];
@@ -230,7 +236,7 @@ export default async function ProjectHubPage({
         <div className="anim-fade-up stagger-3">
           <p className="section-label">{project.clientName} — page-level results</p>
           <AuditResults
-            job={{ id: latestJobs[0]?.id as string } as any}
+            job={{ id: clientJobId } as any}
             scores={clientScores}
             summary={computeQuickSummary(clientScores)}
             competitorPages={competitorPageEntries}
