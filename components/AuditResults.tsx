@@ -46,9 +46,15 @@ interface Props {
   summary: AuditSummary;
   /** Flattened competitor pages (all competitors) for the "outperforming" card. */
   competitorPages?: CompetitorPageEntry[];
+  /**
+   * When set, each CLIENT page row gets an "Optimize" button linking to the
+   * per-URL optimize workbench. Competitor pages never get one — you can't
+   * edit someone else's content; they're the benchmark instead.
+   */
+  projectId?: string;
 }
 
-export default function AuditResults({ job, scores, summary, competitorPages = [] }: Props) {
+export default function AuditResults({ job, scores, summary, competitorPages = [], projectId }: Props) {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<"overallScore" | ScoreDimension>("overallScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -344,6 +350,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                 <SortHeader label="Cite" field="citable" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Reuse" field="reusable" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <th className="px-4 py-3">Grade</th>
+                {projectId && <th className="px-4 py-3" />}
               </tr>
             </thead>
             <tbody>
@@ -388,6 +395,17 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                       {page.grade}
                     </span>
                   </td>
+                  {projectId && (
+                    <td className="px-4 py-3">
+                      <a
+                        href={`/projects/${projectId}/optimize/${page.pageId}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="inline-block rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                      >
+                        Optimize
+                      </a>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -397,7 +415,13 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
 
       {/* Page detail drawer */}
       {selectedPage && (
-        <PageDetail page={selectedPage} onClose={() => setSelectedPage(null)} />
+        <PageDetail
+          page={selectedPage}
+          onClose={() => setSelectedPage(null)}
+          optimizeHref={
+            projectId ? `/projects/${projectId}/optimize/${selectedPage.pageId}` : undefined
+          }
+        />
       )}
     </div>
   );
@@ -626,7 +650,15 @@ function ClassifyButton({
   );
 }
 
-function PageDetail({ page, onClose }: { page: PageScore; onClose: () => void }) {
+function PageDetail({
+  page,
+  onClose,
+  optimizeHref,
+}: {
+  page: PageScore;
+  onClose: () => void;
+  optimizeHref?: string;
+}) {
   return (
     <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
       <div className="w-full max-w-2xl rounded-2xl border border-slate-300 bg-white p-6 space-y-5 max-h-[85vh] overflow-y-auto">
@@ -638,6 +670,14 @@ function PageDetail({ page, onClose }: { page: PageScore; onClose: () => void })
                 {page.grade}
               </span>
               <span className="text-slate-900 text-lg font-bold">{page.overallScore}/100</span>
+              {optimizeHref && (
+                <a
+                  href={optimizeHref}
+                  className="ml-2 rounded-lg bg-indigo-600 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-500 transition-colors"
+                >
+                  ✦ Optimize this page
+                </a>
+              )}
             </div>
           </div>
           <button
