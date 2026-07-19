@@ -85,6 +85,30 @@ export interface WorkbenchProps {
 
 type Tab = "content" | "details" | "diff";
 
+// Dimensions with a live-web research action (structural dimensions are
+// served by AI rewrite instead).
+const RESEARCH_DIMS: Partial<
+  Record<ScoreDimension, { button: string; header: string }>
+> = {
+  edgeCases: { button: "🔎 Fetch Real Edge Cases", header: "Real edge cases found for this page" },
+  impliedQuestions: { button: "🔎 Fetch Real Questions", header: "Questions people actually ask" },
+  fanOutQueries: { button: "🔎 Fetch Related Topics", header: "Adjacent topics worth covering" },
+  citable: { button: "🔎 Fetch Authoritative Sources", header: "Authoritative sources worth citing" },
+};
+
+interface ResearchSuggestion {
+  title: string;
+  summary: string;
+  sourceUrl: string;
+  sourceTitle: string;
+}
+
+interface ResearchState {
+  suggestions: ResearchSuggestion[];
+  cached: boolean;
+  fetchedAt: string;
+}
+
 interface EditorState {
   title: string;
   metaDescription: string;
@@ -110,11 +134,17 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<Tab>("content");
   const [expanded, setExpanded] = useState<ScoreDimension | null>(null);
-  const [busy, setBusy] = useState<"" | "save" | "simulate" | "rewrite">("");
+  const [busy, setBusy] = useState<
+    "" | "save" | "simulate" | "rewrite" | "research" | "generate"
+  >("");
   const [error, setError] = useState<string>("");
-  const [proposal, setProposal] = useState<{ dims: ScoreDimension[]; markdown: string } | null>(
-    null
-  );
+  const [proposal, setProposal] = useState<{
+    dims: ScoreDimension[];
+    markdown: string;
+    mode: "replace" | "append";
+  } | null>(null);
+  const [research, setResearch] = useState<Partial<Record<ScoreDimension, ResearchState>>>({});
+  const [checkedSug, setCheckedSug] = useState<Record<string, boolean>>({});
 
   const activeSim = useMemo(() => {
     if (!activeDraftId) return null;
@@ -202,9 +232,70 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
-      setProposal({ dims, markdown: data.markdown as string });
+      setProposal({ dims, markdown: data.markdown as string, mode: "replace" });
     } catch (err) {
       setError(err instanceof Error ? err.message : "Rewrite failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function fetchResearch(dim: ScoreDimension, refresh = false) {
+    setBusy("research");
+    setError("");
+    try {
+      const res = await fetch(`/api/optimize/${pageId}/research`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dimension: dim, refresh }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setResearch((r) => ({
+        ...r,
+        [dim]: {
+          suggestions: data.suggestions as ResearchSuggestion[],
+          cached: data.cached === true,
+          fetchedAt: (data.fetchedAt as string) ?? "",
+        },
+      }));
+      // Pre-check everything — most users want most of what was found.
+      const next: Record<string, boolean> = {};
+      (data.suggestions as ResearchSuggestion[]).forEach((_, i) => {
+        next[`${dim}:${i}`] = true;
+      });
+      setCheckedSug((c) => ({ ...c, ...next }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Research failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function generateCopy(dim: ScoreDimension) {
+    const state = research[dim];
+    if (!state) return;
+    const selected = state.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`]);
+    if (selected.length === 0) return;
+    setBusy("generate");
+    setError("");
+    try {
+      const res = await fetch(`/api/optimize/${pageId}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dimension: dim,
+          selected,
+          title: editor.title,
+          metaDescription: editor.metaDescription,
+          bodyMd: editor.bodyMd,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setProposal({ dims: [dim], markdown: data.markdown as string, mode: "append" });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Copy generation failed");
     } finally {
       setBusy("");
     }
@@ -643,13 +734,100 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                           {activeSim?.rationale?.[dim] && (
                             <InsightBox label="Simulated rationale" text={activeSim.rationale[dim]} accent />
                           )}
-                          <button
-                            onClick={() => rewrite([dim])}
-                            disabled={busy !== ""}
-                            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
-                          >
-                            {busy === "rewrite" ? "Writing…" : `✦ AI Rewrite for ${DIMENSION_LABELS[dim]}`}
-                          </button>
+                          <div className="flex gap-2 flex-wrap">
+                            <button
+                              onClick={() => rewrite([dim])}
+                              disabled={busy !== ""}
+                              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+                            >
+                              {busy === "rewrite" ? "Writing…" : `✦ AI Rewrite for ${DIMENSION_LABELS[dim]}`}
+                            </button>
+                            {RESEARCH_DIMS[dim] && !research[dim] && (
+                              <button
+                                onClick={() => fetchResearch(dim)}
+                                disabled={busy !== ""}
+                                className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                              >
+                                {busy === "research" ? "Searching the web…" : RESEARCH_DIMS[dim]!.button}
+                              </button>
+                            )}
+                          </div>
+
+                          {RESEARCH_DIMS[dim] && research[dim] && (
+                            <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <p className="text-[11px] font-bold text-indigo-800">
+                                  {RESEARCH_DIMS[dim]!.header} — live web research
+                                </p>
+                                <span className="text-[10px] text-slate-400">
+                                  {research[dim]!.suggestions.length} source-backed item
+                                  {research[dim]!.suggestions.length !== 1 ? "s" : ""}
+                                  {research[dim]!.cached && (
+                                    <>
+                                      {" · cached "}
+                                      <button
+                                        onClick={() => fetchResearch(dim, true)}
+                                        disabled={busy !== ""}
+                                        className="underline text-indigo-600 disabled:opacity-50"
+                                      >
+                                        refresh
+                                      </button>
+                                    </>
+                                  )}
+                                </span>
+                              </div>
+                              {research[dim]!.suggestions.map((s, i) => (
+                                <label
+                                  key={i}
+                                  className="flex items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 cursor-pointer"
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5"
+                                    checked={checkedSug[`${dim}:${i}`] === true}
+                                    onChange={(e) =>
+                                      setCheckedSug((c) => ({ ...c, [`${dim}:${i}`]: e.target.checked }))
+                                    }
+                                  />
+                                  <span className="min-w-0">
+                                    <span className="block text-xs font-semibold text-slate-800">{s.title}</span>
+                                    <span className="block text-[11px] text-slate-500 mt-0.5">{s.summary}</span>
+                                    <a
+                                      href={s.sourceUrl}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      onClick={(e) => e.stopPropagation()}
+                                      className="block text-[10.5px] text-indigo-600 hover:underline mt-0.5 truncate"
+                                    >
+                                      ↗ {s.sourceTitle}
+                                    </a>
+                                  </span>
+                                </label>
+                              ))}
+                              <div className="flex items-center justify-between gap-2 flex-wrap">
+                                <span className="text-[10px] text-slate-400">
+                                  Every suggestion carries its source. Nothing is invented.
+                                </span>
+                                <button
+                                  onClick={() => generateCopy(dim)}
+                                  disabled={
+                                    busy !== "" ||
+                                    research[dim]!.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`])
+                                      .length === 0
+                                  }
+                                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+                                >
+                                  {busy === "generate"
+                                    ? "Writing…"
+                                    : `Generate Copy from Selected (${
+                                        research[dim]!.suggestions.filter(
+                                          (_, i) => checkedSug[`${dim}:${i}`]
+                                        ).length
+                                      })`}
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -668,7 +846,9 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
             <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-900">
-                  ✦ AI Rewrite proposal — targeting {proposal.dims.map((d) => DIMENSION_LABELS[d]).join(", ")}
+                  {proposal.mode === "append"
+                    ? `✦ New section from real research — ${proposal.dims.map((d) => DIMENSION_LABELS[d]).join(", ")}`
+                    : `✦ AI Rewrite proposal — targeting ${proposal.dims.map((d) => DIMENSION_LABELS[d]).join(", ")}`}
                 </h3>
                 <p className="text-[11px] text-slate-400 mt-0.5">
                   Review before accepting. Bracketed [ADD: …] placeholders mark spots that need your real data — the AI never invents facts.
@@ -688,13 +868,18 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
               </button>
               <button
                 onClick={() => {
-                  update("bodyMd", proposal.markdown);
+                  update(
+                    "bodyMd",
+                    proposal.mode === "append"
+                      ? `${editor.bodyMd.replace(/\s+$/, "")}\n\n${proposal.markdown}`
+                      : proposal.markdown
+                  );
                   setProposal(null);
                   setTab("content");
                 }}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
               >
-                ✓ Replace editor content
+                {proposal.mode === "append" ? "✓ Insert into content" : "✓ Replace editor content"}
               </button>
             </div>
           </div>
