@@ -100,13 +100,26 @@ Write ONE insertable markdown section (starting with a "## " heading) that weave
       timeout: 95_000,
       maxRetries: 1,
     });
-    const response = await anthropic.messages.create({
+    // Newer dateless-ID models (claude-sonnet-5+) deprecate the temperature
+    // parameter — only send it to dated snapshots, with a retry fallback.
+    const reqParams = {
       model: GENERATE_MODEL,
       max_tokens: 4096,
-      temperature: 0.3,
       system: GENERATE_SYSTEM,
-      messages: [{ role: "user", content: prompt }],
-    });
+      messages: [{ role: "user" as const, content: prompt }],
+      ...(supportsTemperature(GENERATE_MODEL) ? { temperature: 0.3 } : {}),
+    };
+    let response;
+    try {
+      response = await anthropic.messages.create(reqParams);
+    } catch (err) {
+      if (isTemperatureRejection(err) && "temperature" in reqParams) {
+        const { temperature: _drop, ...rest } = reqParams as { temperature?: number } & typeof reqParams;
+        response = await anthropic.messages.create(rest);
+      } else {
+        throw err;
+      }
+    }
 
     const markdown = response.content
       .filter((b) => b.type === "text")
@@ -123,6 +136,16 @@ Write ONE insertable markdown section (starting with a "## " heading) that weave
     console.error(`[api/optimize/${params.pageId}/generate POST]`, err);
     return NextResponse.json({ error: "Copy generation failed — please try again" }, { status: 500 });
   }
+}
+
+/** Dated snapshots (…-YYYYMMDD) accept temperature; newer dateless IDs deprecate it. */
+function supportsTemperature(model: string): boolean {
+  return /-\d{8}$/.test(model);
+}
+
+function isTemperatureRejection(err: unknown): boolean {
+  const e = err as { status?: number; message?: string };
+  return e?.status === 400 && String(e?.message ?? "").toLowerCase().includes("temperature");
 }
 
 function sanitizeSelected(v: unknown): SelectedItem[] {
