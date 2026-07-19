@@ -223,6 +223,21 @@ export default async function ProjectHubPage({
           )}
           <div className="flex flex-col items-end gap-1.5">
             <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
+            {project.latestScore != null && !isRunning && (
+              <a
+                href={`/api/projects/${params.id}/report`}
+                className="btn-ghost flex items-center gap-1.5"
+                style={{ fontSize: 12, padding: "6px 12px" }}
+                title="Generate the client-ready PDF assessment from the latest completed run"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}>
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+                Download Assessment
+              </a>
+            )}
             {staleBaseline && !isRunning && (
               <p className="text-[10.5px] text-amber-600 text-right max-w-[200px] leading-snug">
                 ⚠ Re-run before optimizing — current scores are from an older scoring engine
