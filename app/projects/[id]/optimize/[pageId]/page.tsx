@@ -145,5 +145,6 @@ async function loadBaseline(pageId: string): Promise<WorkbenchBaseline | null> {
     grade: r.grade as WorkbenchBaseline["grade"],
     modelVersion: r.model_version as string,
     scoredAt: new Date(r.scored_at as string).toISOString(),
+    contentHash: (r.content_hash as string | null) ?? null,
   };
 }
