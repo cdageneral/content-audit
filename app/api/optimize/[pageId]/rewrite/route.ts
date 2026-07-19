@@ -87,16 +87,28 @@ export async function POST(req: NextRequest, { params }: Params) {
       timeout: 95_000,
       maxRetries: 1,
     });
-    const response = await anthropic.messages.create({
+    // Slight temperature: this is writing, not measurement. BUT newer
+    // dateless-ID models (claude-sonnet-5 and later generations) reject the
+    // temperature parameter as deprecated — only send it to dated snapshots,
+    // and fall back to a temperature-free retry if the API refuses it anyway.
+    const reqParams = {
       model: REWRITE_MODEL,
       max_tokens: 8192,
-      // Slight temperature: this is writing, not measurement. Determinism
-      // matters for SCORING; a rewrite proposal the user reviews does not
-      // need to be identical run-to-run.
-      temperature: 0.3,
       system: REWRITE_SYSTEM,
-      messages: [{ role: "user", content: prompt }],
-    });
+      messages: [{ role: "user" as const, content: prompt }],
+      ...(supportsTemperature(REWRITE_MODEL) ? { temperature: 0.3 } : {}),
+    };
+    let response;
+    try {
+      response = await anthropic.messages.create(reqParams);
+    } catch (err) {
+      if (isTemperatureRejection(err) && "temperature" in reqParams) {
+        const { temperature: _drop, ...rest } = reqParams as { temperature?: number } & typeof reqParams;
+        response = await anthropic.messages.create(rest);
+      } else {
+        throw err;
+      }
+    }
 
     const markdown = response.content
       .filter((b) => b.type === "text")
@@ -113,6 +125,18 @@ export async function POST(req: NextRequest, { params }: Params) {
     console.error(`[api/optimize/${params.pageId}/rewrite POST]`, err);
     return NextResponse.json({ error: "Rewrite failed — please try again" }, { status: 500 });
   }
+}
+
+// ── Model quirk helpers ───────────────────────────────────────
+
+/** Dated snapshots (…-YYYYMMDD) accept temperature; newer dateless IDs deprecate it. */
+function supportsTemperature(model: string): boolean {
+  return /-\d{8}$/.test(model);
+}
+
+function isTemperatureRejection(err: unknown): boolean {
+  const e = err as { status?: number; message?: string };
+  return e?.status === 400 && String(e?.message ?? "").toLowerCase().includes("temperature");
 }
 
 // ── Audit context ─────────────────────────────────────────────
