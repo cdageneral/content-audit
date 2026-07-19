@@ -100,7 +100,11 @@ export async function GET(req: NextRequest, { params }: Params) {
           },
         });
       } catch (err) {
-        console.error("[report] PDF generation failed, serving HTML fallback:", err);
+        const msg = String((err as Error)?.message ?? err);
+        console.error(
+          "[report] PDF generation failed, serving HTML fallback. Error tail:",
+          msg.length > 900 ? "…" + msg.slice(-900) : msg
+        );
         // fall through to HTML
       }
     }
