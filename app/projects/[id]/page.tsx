@@ -13,6 +13,7 @@ import AddCompetitorForm from "@/components/AddCompetitorForm";
 import DeleteCompetitorButton from "@/components/DeleteCompetitorButton";
 import AuditResults from "@/components/AuditResults";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
+import InfoTip from "@/components/InfoTip";
 
 export const revalidate = 0;
 
@@ -106,6 +107,21 @@ export default async function ProjectHubPage({
   // must be the client job (previously it was only used as a React key).
   const clientJobId = (latestJobs.find((j) => !j.competitor_id)?.id ?? latestJobs[0]?.id) as string;
 
+  // Stale-baseline check: score rows produced before the determinism deploy
+  // carry no content fingerprint (content_hash IS NULL). Optimizing against
+  // them is apples-to-oranges — simulations run on the CURRENT engine — so we
+  // surface a "re-run first" nudge until a fresh audit replaces them.
+  let staleBaseline = false;
+  if (clientJobId) {
+    const staleRows = await sql`
+      SELECT COUNT(*)::int AS n FROM page_scores
+      WHERE job_id = ${clientJobId}
+        AND content_hash IS NULL
+        AND model_version <> 'error'
+    `.catch(() => [] as Record<string, unknown>[]);
+    staleBaseline = ((staleRows[0]?.n as number) ?? 0) > 0;
+  }
+
   // Flattened competitor pages for the "Competitors outperforming you" card.
   const competitorPageEntries = project.competitors.flatMap((c) => {
     const cs = latestScoresMap[c.id] ?? [];
@@ -182,7 +198,13 @@ export default async function ProjectHubPage({
               <div className="text-3xl font-bold" style={{ color: scoreColor(project.latestScore) }}>
                 {project.latestScore}
               </div>
-              <div className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>Latest score</div>
+              <div className="text-xs mt-0.5 flex items-center justify-center gap-1.5" style={{ color: "var(--text-3)" }}>
+                Latest score
+                <InfoTip
+                  title="Latest score"
+                  text="The average overall LLM-readiness score (0–100) across all pages in the latest completed audit run of this site."
+                />
+              </div>
             </div>
           )}
           {clientMedianGrade && (
@@ -190,10 +212,23 @@ export default async function ProjectHubPage({
               <div className="text-3xl font-bold" style={{ color: gradeColor(clientMedianGrade) }}>
                 {clientMedianGrade}
               </div>
-              <div className="text-xs mt-0.5" style={{ color: "var(--text-3)" }}>Median grade</div>
+              <div className="text-xs mt-0.5 flex items-center justify-center gap-1.5" style={{ color: "var(--text-3)" }}>
+                Median grade
+                <InfoTip
+                  title="Median grade"
+                  text="The middle letter grade across all audited pages — a truer picture of the typical page than the average, since a few very strong or very weak pages can't skew it."
+                />
+              </div>
             </div>
           )}
-          <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
+          <div className="flex flex-col items-end gap-1.5">
+            <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
+            {staleBaseline && !isRunning && (
+              <p className="text-[10.5px] text-amber-600 text-right max-w-[200px] leading-snug">
+                ⚠ Re-run before optimizing — current scores are from an older scoring engine
+              </p>
+            )}
+          </div>
         </div>
       </div>
 
