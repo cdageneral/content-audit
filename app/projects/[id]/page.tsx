@@ -240,6 +240,7 @@ export default async function ProjectHubPage({
             scores={clientScores}
             summary={computeQuickSummary(clientScores)}
             competitorPages={competitorPageEntries}
+            projectId={params.id}
           />
         </div>
       )}
