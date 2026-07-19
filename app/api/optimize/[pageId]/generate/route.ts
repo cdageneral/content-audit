@@ -8,10 +8,11 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { neon } from "@neondatabase/serverless";
 import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
-import type { ScoreDimension } from "@/lib/types";
+import type { ScoreDimension, Recommendation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -71,6 +72,17 @@ export async function POST(req: NextRequest, { params }: Params) {
       )
       .join("\n");
 
+    // The auditor's stored findings: the written section should explicitly
+    // close the gaps the auditor named, not just add adjacent material.
+    const findings = await loadDimensionFindings(params.pageId, dimension);
+    const findingsBlock = findings.rationale || findings.recommendations.length
+      ? `## What the audit found on this dimension (close these named gaps first)
+
+${findings.rationale ? `Auditor rationale: ${findings.rationale}` : ""}
+${findings.recommendations.map((r) => `Recommendation [${r.priority}]: ${r.suggestion}`).join("\n")}
+`
+      : "";
+
     const prompt = `## The audit's scoring rubric (how the page will be graded)
 
 ${SCORING_SYSTEM_PROMPT}
@@ -78,6 +90,8 @@ ${SCORING_SYSTEM_PROMPT}
 ## Target dimension to strengthen
 
 ${DIMENSION_LABELS[dimension]}
+
+${findingsBlock}
 
 ## The page
 
@@ -93,7 +107,7 @@ ${bodyMd.slice(0, 20_000) || "(empty)"}
 ${items}
 
 ---
-Write ONE insertable markdown section (starting with a "## " heading) that weaves these research items into the page to strengthen ${DIMENSION_LABELS[dimension]} without degrading any other dimension. Cite each source inline per rule 2. Keep it proportionate: roughly 150–350 words unless the items clearly justify more. Do not repeat content the page already covers — extend it.`;
+Write ONE insertable markdown section (starting with a "## " heading) that weaves these research items into the page to strengthen ${DIMENSION_LABELS[dimension]} without degrading any other dimension. If the audit named specific gaps above, structure the section around closing THOSE first — a gap the auditor named and you closed moves the score; adjacent material doesn't. Cite each source inline per rule 2. Keep it proportionate: roughly 150–350 words unless the items clearly justify more. Do not repeat content the page already covers — extend it.`;
 
     const anthropic = new Anthropic({
       apiKey: process.env.ANTHROPIC_API_KEY,
@@ -136,6 +150,36 @@ Write ONE insertable markdown section (starting with a "## " heading) that weave
     console.error(`[api/optimize/${params.pageId}/generate POST]`, err);
     return NextResponse.json({ error: "Copy generation failed — please try again" }, { status: 500 });
   }
+}
+
+// ── Auditor findings for one dimension ────────────────────────
+
+interface DimensionFindings {
+  rationale?: string;
+  recommendations: Recommendation[];
+}
+
+async function loadDimensionFindings(
+  pageId: string,
+  dimension: ScoreDimension
+): Promise<DimensionFindings> {
+  const out: DimensionFindings = { recommendations: [] };
+  if (!process.env.DATABASE_URL) return out;
+  const sql = neon(process.env.DATABASE_URL, { fetchOptions: { cache: "no-store" } });
+  const rows = await sql`
+    SELECT rationale, recommendations FROM page_scores
+    WHERE page_id = ${pageId} AND model_version <> 'error'
+    ORDER BY scored_at DESC
+    LIMIT 1
+  `.catch(() => [] as Record<string, unknown>[]);
+  const r = rows[0];
+  if (!r) return out;
+  const rationale = (r.rationale as Record<string, string>) ?? {};
+  if (rationale[dimension]) out.rationale = rationale[dimension];
+  out.recommendations = ((r.recommendations as Recommendation[]) ?? [])
+    .filter((rec) => rec.dimension === dimension)
+    .slice(0, 4);
+  return out;
 }
 
 /** Dated snapshots (…-YYYYMMDD) accept temperature; newer dateless IDs deprecate it. */
