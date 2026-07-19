@@ -19,6 +19,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
+import { neon } from "@neondatabase/serverless";
 import {
   getPageForOptimize,
   getLatestResearch,
@@ -26,7 +27,8 @@ import {
   countRecentResearch,
 } from "@/lib/db/drafts";
 import type { ResearchSuggestion } from "@/lib/db/drafts";
-import type { ScoreDimension } from "@/lib/types";
+import { DIMENSION_LABELS } from "@/lib/types";
+import type { ScoreDimension, Recommendation } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -94,6 +96,18 @@ export async function POST(req: NextRequest, { params }: Params) {
       .map((h) => `- ${h.text}`)
       .join("\n");
 
+    // The auditor's own findings for this dimension — searches should target
+    // the SPECIFIC gaps it named (e.g. "what happens if denied"), not just
+    // generic topic material. Closing named gaps is what moves the score.
+    const findings = await loadDimensionFindings(params.pageId, dimension);
+    const findingsBlock = findings.rationale || findings.recommendations.length
+      ? `## What the audit found on ${DIMENSION_LABELS[dimension]} for THIS page
+${findings.rationale ? `Auditor rationale: ${findings.rationale}` : ""}
+${findings.recommendations.map((r) => `Recommendation [${r.priority}]: ${r.suggestion}`).join("\n")}
+
+The gaps named above are your PRIMARY search targets — turn each named missing scenario/topic into its own search (e.g. if the auditor says the page misses "what happens if denied", search for exactly that). Only after covering the named gaps, add other high-value items.`
+      : "";
+
     const userMessage = `${DIRECTIVES[dimension]}
 
 ## The page being optimized
@@ -104,9 +118,11 @@ Main headings:
 ${headingList || "(none)"}
 Opening content: ${page.bodyText.slice(0, 600)}
 
+${findingsBlock}
+
 ## Your task
 1. Derive the page's core topic from the details above.
-2. Use web_search (up to 4 searches) to find REAL, current material per the directive.
+2. Use web_search (up to 4 searches) to find REAL, current material — prioritizing the auditor's named gaps when present.
 3. Finish by calling record_research_suggestions with 3–6 suggestions.
 
 Hard rules:
@@ -175,6 +191,36 @@ Hard rules:
     console.error(`[api/optimize/${params.pageId}/research POST]`, err);
     return NextResponse.json({ error: "Research failed — please try again" }, { status: 500 });
   }
+}
+
+// ── Auditor findings for one dimension ────────────────────────
+
+interface DimensionFindings {
+  rationale?: string;
+  recommendations: Recommendation[];
+}
+
+async function loadDimensionFindings(
+  pageId: string,
+  dimension: ScoreDimension
+): Promise<DimensionFindings> {
+  const out: DimensionFindings = { recommendations: [] };
+  if (!process.env.DATABASE_URL) return out;
+  const sql = neon(process.env.DATABASE_URL, { fetchOptions: { cache: "no-store" } });
+  const rows = await sql`
+    SELECT rationale, recommendations FROM page_scores
+    WHERE page_id = ${pageId} AND model_version <> 'error'
+    ORDER BY scored_at DESC
+    LIMIT 1
+  `.catch(() => [] as Record<string, unknown>[]);
+  const r = rows[0];
+  if (!r) return out;
+  const rationale = (r.rationale as Record<string, string>) ?? {};
+  if (rationale[dimension]) out.rationale = rationale[dimension];
+  out.recommendations = ((r.recommendations as Recommendation[]) ?? [])
+    .filter((rec) => rec.dimension === dimension)
+    .slice(0, 4);
+  return out;
 }
 
 // ── Record tool definition ────────────────────────────────────
