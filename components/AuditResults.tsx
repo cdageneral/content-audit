@@ -24,6 +24,7 @@ import {
   isAiFetchLikely,
   AI_FETCH_READINESS_BAR,
 } from "@/lib/types";
+import InfoTip from "@/components/InfoTip";
 
 const BUCKET_COLORS: Record<IntentBucket, string> = {
   recency: "#d97706",     // amber — time-sensitive
@@ -106,17 +107,23 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
     <div className="space-y-6">
       {/* Summary row */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard label="Pages Audited" value={summary.totalPages.toString()} />
+        <StatCard
+          label="Pages Audited"
+          value={summary.totalPages.toString()}
+          tip="How many pages were crawled and scored in the latest completed audit run for this site."
+        />
         <StatCard
           label="Avg LLM Score"
           value={`${summary.averageScore}`}
           sub={`/ 100`}
           color={scoreColor(summary.averageScore)}
+          tip="The average overall score (0–100) across all audited pages. Each page's overall score is a weighted blend of the 8 LLM-readiness dimensions."
         />
         <StatCard
           label="Top Issue"
           value={DIMENSION_LABELS[summary.topIssues[0]?.dimension]}
           sub={`avg ${summary.topIssues[0]?.averageScore}`}
+          tip="The scoring dimension with the lowest average across your pages — usually the highest-leverage thing to fix first."
         />
         {/* AI fetch likelihood: % of pages that fit a crawl-forcing intent
             bucket AND clear the retrievable/citable readiness bar. */}
@@ -124,8 +131,12 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
           className="rounded-xl border border-slate-200 bg-white p-4"
           title={`Pages matching a crawl-forcing intent bucket with retrievable/citable average ≥ ${AI_FETCH_READINESS_BAR}`}
         >
-          <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">
+          <p className="text-xs text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
             Likely AI Fetch
+            <InfoTip
+              title="Likely AI Fetch"
+              text={`Percent of pages that both match a crawl-forcing intent (recency, ranking, local, or comparison) AND are retrieval-ready (retrievable/citable average of ${AI_FETCH_READINESS_BAR}+). These are the pages most plausibly fetched and used by AI answer engines like ChatGPT search or Google AI Overviews.`}
+            />
           </p>
           {classifiedCount === 0 ? (
             <>
@@ -148,7 +159,13 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
           )}
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <p className="text-xs text-slate-500 uppercase tracking-wide mb-2">Grades</p>
+          <p className="text-xs text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+            Grades
+            <InfoTip
+              title="Grades"
+              text="How many pages earned each letter grade, based on their overall score: A 85–100, B 70–84, C 55–69, D 40–54, F below 40."
+            />
+          </p>
           <div className="flex gap-2 flex-wrap">
             {(["A", "B", "C", "D", "F"] as const).map((g) => (
               <span key={g} className={`grade-${g} rounded-md px-2 py-0.5 text-xs font-bold`}>
@@ -163,7 +180,13 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Radar */}
         <div className="rounded-xl border border-slate-200 bg-white p-4">
-          <h3 className="text-sm font-semibold text-slate-700 mb-3">Score by Dimension</h3>
+          <h3 className="text-sm font-semibold text-slate-700 mb-3 flex items-center gap-1.5">
+            Score by Dimension
+            <InfoTip
+              title="Score by Dimension"
+              text="Your site's average score on each of the 8 LLM-readiness dimensions. The fuller the shape, the stronger the site — dents show where AI systems struggle with your content."
+            />
+          </h3>
           <ResponsiveContainer width="100%" height={260}>
             <RadarChart data={radarData}>
               <PolarGrid stroke="#e2e8f0" />
@@ -188,7 +211,13 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
 
         {/* Top issues */}
         <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-          <h3 className="text-sm font-semibold text-slate-700">Top Issues to Fix</h3>
+          <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+            Top Issues to Fix
+            <InfoTip
+              title="Top Issues to Fix"
+              text="Your four lowest-scoring dimensions, with how many pages fall below 50 on each. Fixing these sitewide moves the average score fastest."
+            />
+          </h3>
           {summary.topIssues.map((issue) => (
             <div key={issue.dimension} className="flex items-center gap-3">
               <div className="w-full">
@@ -219,18 +248,21 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <RankCard
           title="Top 5 Strongest Pages"
+          tip="Your highest-scoring pages. Use them as internal templates — their structure and style are what the scoring engine rewards."
           rows={strongest.map((p) => ({ url: p.url, score: p.overallScore, grade: p.grade }))}
           onRowClick={(url) => setSelectedPage(scores.find((s) => s.url === url) ?? null)}
           emptyText="No pages scored yet."
         />
         <RankCard
           title="Top 5 Weakest Pages"
+          tip="Your lowest-scoring pages — the best candidates for the Optimize workbench, where you can rewrite, simulate, and re-score them."
           rows={weakest.map((p) => ({ url: p.url, score: p.overallScore, grade: p.grade }))}
           onRowClick={(url) => setSelectedPage(scores.find((s) => s.url === url) ?? null)}
           emptyText="No pages scored yet."
         />
         <RankCard
           title="Competitors Outperforming You"
+          tip="Competitor pages scoring above your site's average. These set the bar — click a row to see the page, then beat it with the Optimize workbench."
           subtitle={`Beating your avg of ${clientAvg}`}
           rows={outperforming.map((c) => ({
             url: c.url,
@@ -479,15 +511,20 @@ function StatCard({
   value,
   sub,
   color,
+  tip,
 }: {
   label: string;
   value: string;
   sub?: string;
   color?: string;
+  tip?: string;
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
-      <p className="text-xs text-slate-500 uppercase tracking-wide mb-1">{label}</p>
+      <p className="text-xs text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+        {label}
+        {tip && <InfoTip title={label} text={tip} />}
+      </p>
       <p className="text-2xl font-bold" style={{ color: color ?? "var(--text-1)" }}>
         {value}
         {sub && <span className="text-sm text-slate-500 ml-1">{sub}</span>}
@@ -511,17 +548,22 @@ function RankCard({
   rows,
   onRowClick,
   emptyText,
+  tip,
 }: {
   title: string;
   subtitle?: string;
   rows: RankRow[];
   onRowClick?: (url: string) => void;
   emptyText: string;
+  tip?: string;
 }) {
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4">
       <div className="mb-3">
-        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+        <h3 className="text-sm font-semibold text-slate-700 flex items-center gap-1.5">
+          {title}
+          {tip && <InfoTip title={title} text={tip} />}
+        </h3>
         {subtitle && <p className="text-xs text-slate-400 mt-0.5">{subtitle}</p>}
       </div>
       {rows.length === 0 ? (

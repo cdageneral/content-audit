@@ -35,6 +35,8 @@ export interface WorkbenchBaseline {
   grade: "A" | "B" | "C" | "D" | "F";
   modelVersion: string;
   scoredAt: string; // ISO
+  /** null = scored before the determinism engine (no content fingerprint) — deltas vs simulations won't line up until a re-audit. */
+  contentHash?: string | null;
 }
 
 export interface WorkbenchDraft {
@@ -475,6 +477,21 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2.5 text-xs text-red-700 flex items-center justify-between">
           <span>{error}</span>
           <button onClick={() => setError("")} className="font-bold ml-3">×</button>
+        </div>
+      )}
+
+      {baseline && baseline.contentHash === null && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-2.5 text-xs text-amber-800 flex items-start gap-2">
+          <span>⚠</span>
+          <span>
+            <b>Re-run the audit before optimizing this page.</b> Its baseline was scored by an older
+            version of the scoring engine, so simulated deltas won&apos;t line up with the baseline
+            numbers. Run the project audit from the{" "}
+            <Link href={`/projects/${projectId}`} className="underline">
+              project page
+            </Link>{" "}
+            first — fresh baselines match simulations exactly.
+          </span>
         </div>
       )}
 
