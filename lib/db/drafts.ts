@@ -83,6 +83,29 @@ export function ensureOptimizeSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_draft_sims_project_time
         ON draft_simulations(project_id, created_at)
       `;
+      // Phase 2: cached live-web research suggestions per (page, dimension).
+      // Cache serves repeat opens for free; a new row is only written by a
+      // fresh (paid) web-search call, so the row count doubles as the
+      // cost-control counter.
+      await sql`
+        CREATE TABLE IF NOT EXISTS research_results (
+          id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          page_id       UUID NOT NULL,
+          project_id    UUID NOT NULL,
+          dimension     TEXT NOT NULL,
+          suggestions   JSONB NOT NULL DEFAULT '[]',
+          model_version TEXT NOT NULL,
+          created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_research_page_dim
+        ON research_results(page_id, dimension, created_at)
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_research_project_time
+        ON research_results(project_id, created_at)
+      `;
     })().catch((err) => {
       optimizeSchemaReady = null; // allow retry instead of caching the failure
       throw err;
@@ -245,6 +268,81 @@ export async function countRecentSimulations(projectId: string): Promise<number>
       AND created_at > NOW() - INTERVAL '24 hours'
   `;
   return (rows[0]?.n as number) ?? 0;
+}
+
+// ── Research suggestions (Phase 2) ────────────────────────────
+
+export interface ResearchSuggestion {
+  title: string;
+  summary: string;
+  sourceUrl: string;
+  sourceTitle: string;
+}
+
+export interface ResearchResult {
+  id: string;
+  pageId: string;
+  projectId: string;
+  dimension: string;
+  suggestions: ResearchSuggestion[];
+  modelVersion: string;
+  createdAt: Date;
+}
+
+export async function insertResearch(
+  r: Omit<ResearchResult, "id" | "createdAt">
+): Promise<ResearchResult> {
+  await ensureOptimizeSchema();
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO research_results (page_id, project_id, dimension, suggestions, model_version)
+    VALUES (
+      ${r.pageId}, ${r.projectId}, ${r.dimension},
+      ${JSON.stringify(r.suggestions)}, ${r.modelVersion}
+    )
+    RETURNING *
+  `;
+  return rowToResearch(rows[0]);
+}
+
+export async function getLatestResearch(
+  pageId: string,
+  dimension: string
+): Promise<ResearchResult | null> {
+  await ensureOptimizeSchema();
+  const sql = db();
+  const rows = await sql`
+    SELECT * FROM research_results
+    WHERE page_id = ${pageId} AND dimension = ${dimension}
+    ORDER BY created_at DESC
+    LIMIT 1
+  `;
+  return rows[0] ? rowToResearch(rows[0]) : null;
+}
+
+/** Fresh (paid) research calls for a project in the last 24h — drives OPTIMIZE_RESEARCH_DAILY_CAP. */
+export async function countRecentResearch(projectId: string): Promise<number> {
+  await ensureOptimizeSchema();
+  const sql = db();
+  const rows = await sql`
+    SELECT COUNT(*)::int AS n
+    FROM research_results
+    WHERE project_id = ${projectId}
+      AND created_at > NOW() - INTERVAL '24 hours'
+  `;
+  return (rows[0]?.n as number) ?? 0;
+}
+
+function rowToResearch(r: Record<string, unknown>): ResearchResult {
+  return {
+    id: r.id as string,
+    pageId: r.page_id as string,
+    projectId: r.project_id as string,
+    dimension: r.dimension as string,
+    suggestions: (r.suggestions as ResearchSuggestion[]) ?? [],
+    modelVersion: r.model_version as string,
+    createdAt: new Date(r.created_at as string),
+  };
 }
 
 // ── Page lookup (by id, with its job's weights) ───────────────
