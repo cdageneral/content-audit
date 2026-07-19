@@ -131,6 +131,23 @@ export async function GET(req: NextRequest, { params }: Params) {
 // Same launch pattern as lib/crawler/extract.ts (already proven on Vercel).
 
 async function htmlToPdf(html: string): Promise<Buffer> {
+  // Vercel masks AWS_EXECUTION_ENV, so @sparticuz/chromium's lambda detection
+  // fails: it extracts the chromium binary but SKIPS the bundled shared
+  // libraries (libnss3.so etc.) and never sets LD_LIBRARY_PATH — chromium
+  // then dies at launch with "error while loading shared libraries".
+  // Force the Netlify-style runtime flag (checked at executablePath() time)
+  // and set LD_LIBRARY_PATH ourselves (normally a module-load side effect,
+  // which is skipped when the import is already cached).
+  if (!process.env["AWS_EXECUTION_ENV"] && !process.env["AWS_LAMBDA_JS_RUNTIME"]) {
+    process.env["AWS_LAMBDA_JS_RUNTIME"] = "nodejs22.x";
+  }
+  const baseLib = "/tmp/al2023/lib";
+  if (process.env["LD_LIBRARY_PATH"]?.startsWith(baseLib) !== true) {
+    process.env["LD_LIBRARY_PATH"] = [baseLib, process.env["LD_LIBRARY_PATH"] ?? ""]
+      .filter(Boolean)
+      .join(":");
+  }
+
   const { chromium } = await import("playwright-core");
   const chromiumModule = await import("@sparticuz/chromium");
 
