@@ -106,6 +106,30 @@ export function ensureOptimizeSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_research_project_time
         ON research_results(project_id, created_at)
       `;
+      // Phase 3: post-publish verification results. Sandboxed like
+      // simulations — the audit pipeline never reads this table; real audit
+      // history only changes through a normal audit run.
+      await sql`
+        CREATE TABLE IF NOT EXISTS draft_verifications (
+          id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          page_id           UUID NOT NULL,
+          draft_id          UUID NOT NULL,
+          simulation_id     UUID NOT NULL,
+          project_id        UUID NOT NULL,
+          matched           BOOLEAN NOT NULL,
+          live_content_hash TEXT NOT NULL,
+          real_scores       JSONB NOT NULL DEFAULT '{}',
+          real_overall      SMALLINT NOT NULL,
+          real_grade        CHAR(1) NOT NULL,
+          fidelity          JSONB NOT NULL DEFAULT '{}',
+          model_version     TEXT NOT NULL,
+          created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_verifications_draft
+        ON draft_verifications(draft_id, created_at)
+      `;
     })().catch((err) => {
       optimizeSchemaReady = null; // allow retry instead of caching the failure
       throw err;
@@ -340,6 +364,77 @@ function rowToResearch(r: Record<string, unknown>): ResearchResult {
     projectId: r.project_id as string,
     dimension: r.dimension as string,
     suggestions: (r.suggestions as ResearchSuggestion[]) ?? [],
+    modelVersion: r.model_version as string,
+    createdAt: new Date(r.created_at as string),
+  };
+}
+
+// ── Verifications (Phase 3) ───────────────────────────────────
+
+export interface VerificationFidelity {
+  /** 0–100 word-overlap similarity between published bodyText and the draft's. */
+  matchPct: number;
+  titleMatch: boolean;
+  metaMatch: boolean;
+  /** Heading texts in the draft but missing from the published page (≤5). */
+  missingHeadings: string[];
+  /** Heading texts on the published page but not in the draft (≤5). */
+  extraHeadings: string[];
+  /** Sentences on the published page that aren't in the draft (≤3, truncated). */
+  publishedNotInDraft: string[];
+  /** Sentences in the draft that didn't make it to the published page (≤3). */
+  draftNotInPublished: string[];
+}
+
+export interface DraftVerification {
+  id: string;
+  pageId: string;
+  draftId: string;
+  simulationId: string;
+  projectId: string;
+  matched: boolean;
+  liveContentHash: string;
+  realScores: DimensionScores;
+  realOverall: number;
+  realGrade: "A" | "B" | "C" | "D" | "F";
+  fidelity: VerificationFidelity | Record<string, never>;
+  modelVersion: string;
+  createdAt: Date;
+}
+
+export async function insertVerification(
+  v: Omit<DraftVerification, "id" | "createdAt">
+): Promise<DraftVerification> {
+  await ensureOptimizeSchema();
+  const sql = db();
+  const rows = await sql`
+    INSERT INTO draft_verifications (
+      page_id, draft_id, simulation_id, project_id,
+      matched, live_content_hash, real_scores, real_overall, real_grade,
+      fidelity, model_version
+    ) VALUES (
+      ${v.pageId}, ${v.draftId}, ${v.simulationId}, ${v.projectId},
+      ${v.matched}, ${v.liveContentHash}, ${JSON.stringify(v.realScores)},
+      ${v.realOverall}, ${v.realGrade}, ${JSON.stringify(v.fidelity)}, ${v.modelVersion}
+    )
+    RETURNING *
+  `;
+  return rowToVerification(rows[0]);
+}
+
+function rowToVerification(r: Record<string, unknown>): DraftVerification {
+  return {
+    id: r.id as string,
+    pageId: r.page_id as string,
+    draftId: r.draft_id as string,
+    simulationId: r.simulation_id as string,
+    projectId: r.project_id as string,
+    matched: r.matched as boolean,
+    liveContentHash: r.live_content_hash as string,
+    realScores: r.real_scores as DimensionScores,
+    realOverall: r.real_overall as number,
+    realGrade: r.real_grade as DraftVerification["realGrade"],
+    fidelity: (r.fidelity as VerificationFidelity) ?? {},
     modelVersion: r.model_version as string,
     createdAt: new Date(r.created_at as string),
   };
