@@ -109,6 +109,23 @@ interface ResearchState {
   fetchedAt: string;
 }
 
+interface VerifyResult {
+  matched: boolean;
+  realOverall: number;
+  realGrade: "A" | "B" | "C" | "D" | "F";
+  simulatedOverall: number;
+  fidelity?: {
+    matchPct: number;
+    titleMatch: boolean;
+    metaMatch: boolean;
+    missingHeadings: string[];
+    extraHeadings: string[];
+    publishedNotInDraft: string[];
+    draftNotInPublished: string[];
+  };
+  verifiedAt: string;
+}
+
 interface EditorState {
   title: string;
   metaDescription: string;
@@ -135,8 +152,9 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   const [tab, setTab] = useState<Tab>("content");
   const [expanded, setExpanded] = useState<ScoreDimension | null>(null);
   const [busy, setBusy] = useState<
-    "" | "save" | "simulate" | "rewrite" | "research" | "generate"
+    "" | "save" | "simulate" | "rewrite" | "research" | "generate" | "verify"
   >("");
+  const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [error, setError] = useState<string>("");
   const [proposal, setProposal] = useState<{
     dims: ScoreDimension[];
@@ -301,7 +319,28 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     }
   }
 
+  async function verifyPublished() {
+    if (!activeDraftId || !activeSim) return;
+    setBusy("verify");
+    setError("");
+    try {
+      const res = await fetch(`/api/optimize/${pageId}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ draftId: activeDraftId, simulationId: activeSim.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setVerify(data as VerifyResult);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Verification failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
   function selectVersion(id: string) {
+    setVerify(null);
     if (id === "__baseline__") {
       setActiveDraftId(null);
       setEditor({ ...seed });
@@ -397,6 +436,23 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
               "▶ Simulate Score"
             )}
           </button>
+          {activeSim && activeDraftId && (
+            <button
+              onClick={verifyPublished}
+              disabled={busy !== ""}
+              title="Re-crawl the live URL and check whether the published page reproduces the simulated score"
+              className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
+            >
+              {busy === "verify" ? (
+                <span>
+                  <span className="inline-block w-3 h-3 mr-1.5 align-[-2px] rounded-full border-2 border-emerald-600 border-t-transparent animate-spin" />
+                  Verifying…
+                </span>
+              ) : (
+                "✓ Verify Published"
+              )}
+            </button>
+          )}
           {exportHref ? (
             <a
               href={exportHref}
@@ -627,6 +683,76 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
 
         {/* ── RIGHT: scores ── */}
         <div className="space-y-4">
+          {verify && (
+            <div
+              className={`rounded-xl border overflow-hidden ${
+                verify.matched ? "border-emerald-300 bg-emerald-50/50" : "border-amber-300 bg-amber-50/50"
+              }`}
+            >
+              <div className="px-4 py-3 flex items-start gap-2.5">
+                <span className={`text-lg leading-none ${verify.matched ? "text-emerald-600" : "text-amber-600"}`}>
+                  {verify.matched ? "✓" : "△"}
+                </span>
+                <div className="min-w-0 flex-1">
+                  {verify.matched ? (
+                    <>
+                      <p className="text-sm font-bold text-emerald-800">
+                        Published page verified — real score {verify.realOverall} ({verify.realGrade})
+                      </p>
+                      <p className="text-[11.5px] text-emerald-700 mt-0.5">
+                        The live page&apos;s content fingerprint is identical to the simulated draft, so the
+                        real score equals the simulation exactly. No re-scoring was needed.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-bold text-amber-800">
+                        Published page differs from the draft — real score {verify.realOverall} (
+                        {verify.realGrade}) vs simulated {verify.simulatedOverall}
+                      </p>
+                      {verify.fidelity && (
+                        <div className="text-[11.5px] text-amber-800 mt-1 space-y-1">
+                          <p>
+                            Content match: {verify.fidelity.matchPct}%
+                            {!verify.fidelity.titleMatch && " · title differs"}
+                            {!verify.fidelity.metaMatch && " · meta description differs"}
+                          </p>
+                          {verify.fidelity.missingHeadings.length > 0 && (
+                            <p>Draft headings not found on the page: {verify.fidelity.missingHeadings.join(" · ")}</p>
+                          )}
+                          {verify.fidelity.extraHeadings.length > 0 && (
+                            <p>Extra headings on the page: {verify.fidelity.extraHeadings.join(" · ")}</p>
+                          )}
+                          {verify.fidelity.publishedNotInDraft.length > 0 && (
+                            <p className="italic">
+                              On the page but not in your draft: &ldquo;{verify.fidelity.publishedNotInDraft[0]}&rdquo;
+                              {verify.fidelity.publishedNotInDraft.length > 1 &&
+                                ` (+${verify.fidelity.publishedNotInDraft.length - 1} more)`}
+                            </p>
+                          )}
+                          {verify.fidelity.draftNotInPublished.length > 0 && (
+                            <p className="italic">
+                              In your draft but not published: &ldquo;{verify.fidelity.draftNotInPublished[0]}&rdquo;
+                              {verify.fidelity.draftNotInPublished.length > 1 &&
+                                ` (+${verify.fidelity.draftNotInPublished.length - 1} more)`}
+                            </p>
+                          )}
+                          <p className="text-amber-700">
+                            Common cause: the CMS template injects text the editor didn&apos;t include. Update
+                            the draft to match reality and re-simulate, or adjust the published page.
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+                <button onClick={() => setVerify(null)} className="text-slate-400 hover:text-slate-600 text-sm leading-none">
+                  ×
+                </button>
+              </div>
+            </div>
+          )}
+
           {activeSim && baseline && (
             <div className="rounded-xl border border-indigo-200 bg-gradient-to-b from-indigo-50/60 to-white overflow-hidden">
               <div className="px-4 py-3 border-b border-indigo-100 flex items-center justify-between">
