@@ -14,6 +14,7 @@ import DeleteCompetitorButton from "@/components/DeleteCompetitorButton";
 import AuditResults from "@/components/AuditResults";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
+import EditAuditSourceButton from "@/components/EditAuditSourceButton";
 
 export const revalidate = 0;
 
@@ -180,16 +181,27 @@ export default async function ProjectHubPage({
               <span style={{ color: "var(--indigo)" }}>{project.scopePrefix}</span>
             )}
           </p>
-          {project.auditSource !== "domain" && (
-            <span
-              className="inline-block mt-2 px-2 py-0.5 rounded-md text-xs font-medium"
-              style={{ background: "rgba(99,102,241,0.12)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.2)" }}
-            >
-              {project.auditSource === "single"
-                ? "Single page"
-                : `URL list · ${project.sourceUrls?.length ?? 0} page${(project.sourceUrls?.length ?? 0) !== 1 ? "s" : ""}`}
-            </span>
-          )}
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            {project.auditSource !== "domain" && (
+              <span
+                className="inline-block px-2 py-0.5 rounded-md text-xs font-medium"
+                style={{ background: "rgba(99,102,241,0.12)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.2)" }}
+              >
+                {project.auditSource === "single"
+                  ? "Single page"
+                  : `URL list · ${project.sourceUrls?.length ?? 0} page${(project.sourceUrls?.length ?? 0) !== 1 ? "s" : ""}`}
+              </span>
+            )}
+            <EditAuditSourceButton
+              projectId={params.id}
+              auditSource={project.auditSource}
+              websiteUrl={project.websiteUrl}
+              scopePrefix={project.scopePrefix}
+              maxPages={project.maxPages}
+              sourceUrls={project.sourceUrls}
+              latestRunUrls={clientScores.map((s) => s.url)}
+            />
+          </div>
         </div>
 
         <div className="flex items-center gap-3">
