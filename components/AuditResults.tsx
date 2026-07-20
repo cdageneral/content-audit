@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   RadarChart,
   PolarGrid,
@@ -53,14 +54,66 @@ interface Props {
    * edit someone else's content; they're the benchmark instead.
    */
   projectId?: string;
+  /**
+   * Project audit-source config — enables the per-page "remove from next run"
+   * checkboxes. Hidden for single-page projects (nothing to prune).
+   */
+  auditSource?: "domain" | "single" | "list";
+  sourceUrls?: string[] | null;
 }
 
-export default function AuditResults({ job, scores, summary, competitorPages = [], projectId }: Props) {
+export default function AuditResults({ job, scores, summary, competitorPages = [], projectId, auditSource, sourceUrls }: Props) {
+  const router = useRouter();
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<"overallScore" | ScoreDimension>("overallScore");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedPage, setSelectedPage] = useState<PageScore | null>(null);
   const [bucketFilter, setBucketFilter] = useState<IntentBucket | null>(null);
+
+  // ── Per-page "remove from next run" selection ───────────────────────────
+  // Pruning converts the project's client URL set to an explicit list minus
+  // the selected pages (PATCH /api/projects/[id]) — nothing runs now, and
+  // past results are untouched. Hidden for single-page projects.
+  const canPrune = !!projectId && auditSource != null && auditSource !== "single" && scores.length > 1;
+  const [removeSet, setRemoveSet] = useState<Set<string>>(new Set());
+  const [removeState, setRemoveState] = useState<"idle" | "confirm" | "saving" | "error">("idle");
+  const baseUrls =
+    auditSource === "list" && sourceUrls?.length
+      ? sourceUrls
+      : Array.from(new Set(scores.map((s) => s.url)));
+  const remainingCount = baseUrls.filter((u) => !removeSet.has(u)).length;
+
+  function toggleRemove(url: string) {
+    setRemoveSet((prev) => {
+      const next = new Set(prev);
+      if (next.has(url)) next.delete(url);
+      else next.add(url);
+      return next;
+    });
+    setRemoveState("idle");
+  }
+
+  async function confirmRemove() {
+    if (!projectId) return;
+    setRemoveState("saving");
+    try {
+      const res = await fetch(`/api/projects/${projectId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          auditSource: "list",
+          sourceUrls: baseUrls.filter((u) => !removeSet.has(u)),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setRemoveSet(new Set());
+      setRemoveState("idle");
+      router.refresh();
+    } catch (err) {
+      console.error("[remove-from-run] failed:", err);
+      setRemoveState("error");
+    }
+  }
 
   // ── Summary-card data (all derived from real audit scores) ──────────────
   const clientAvg = scores.length
@@ -368,10 +421,83 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
           />
         </div>
 
+        {/* Remove-from-next-run action bar */}
+        {canPrune && removeSet.size > 0 && (
+          <div className="px-4 py-2.5 border-b border-amber-200 bg-amber-50 flex items-center gap-3 flex-wrap">
+            {removeState === "confirm" || removeState === "saving" ? (
+              <>
+                <p className="text-xs text-amber-800 flex-1 min-w-[240px]">
+                  {auditSource === "domain"
+                    ? `This switches the project to URL-list mode with the remaining ${remainingCount} page${remainingCount !== 1 ? "s" : ""} — future runs audit exactly that list and won't discover new pages. `
+                    : `Future runs will audit the remaining ${remainingCount} page${remainingCount !== 1 ? "s" : ""}. `}
+                  Past results and trends are kept. Applies from the next run.
+                </p>
+                <button
+                  onClick={() => setRemoveState("idle")}
+                  disabled={removeState === "saving"}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={confirmRemove}
+                  disabled={removeState === "saving"}
+                  className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-500 transition-colors"
+                >
+                  {removeState === "saving" ? "Saving…" : `Confirm — remove ${removeSet.size}`}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-xs text-amber-800 flex-1 min-w-[240px]">
+                  {removeSet.size} page{removeSet.size !== 1 ? "s" : ""} selected
+                  {removeState === "error" && (
+                    <span className="text-red-600 font-medium"> — save failed, try again</span>
+                  )}
+                </p>
+                <button
+                  onClick={() => setRemoveSet(new Set())}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 transition-colors"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={() => setRemoveState("confirm")}
+                  disabled={remainingCount === 0}
+                  title={remainingCount === 0 ? "At least one page must remain in the audit" : undefined}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold text-white transition-colors ${
+                    remainingCount === 0 ? "bg-slate-300 cursor-not-allowed" : "bg-amber-600 hover:bg-amber-500"
+                  }`}
+                >
+                  Remove from next run
+                </button>
+              </>
+            )}
+          </div>
+        )}
+
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
+                {canPrune && (
+                  <th className="px-3 py-3 w-8">
+                    <input
+                      type="checkbox"
+                      title="Select all shown"
+                      aria-label="Select all shown pages"
+                      className="accent-amber-600 cursor-pointer"
+                      checked={filtered.length > 0 && filtered.every((p) => removeSet.has(p.url))}
+                      onChange={(e) => {
+                        const next = new Set(removeSet);
+                        if (e.target.checked) filtered.forEach((p) => next.add(p.url));
+                        else filtered.forEach((p) => next.delete(p.url));
+                        setRemoveSet(next);
+                        setRemoveState("idle");
+                      }}
+                    />
+                  </th>
+                )}
                 <th className="text-left px-4 py-3">URL</th>
                 <th className="text-left px-2 py-3">Buckets</th>
                 <SortHeader label="Score" field="overallScore" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
@@ -390,8 +516,22 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                 <tr
                   key={page.id}
                   onClick={() => setSelectedPage(page)}
-                  className="border-b border-slate-200/70 hover:bg-slate-50 cursor-pointer transition-colors"
+                  className={`border-b border-slate-200/70 hover:bg-slate-50 cursor-pointer transition-colors ${
+                    removeSet.has(page.url) ? "bg-amber-50/60" : ""
+                  }`}
                 >
+                  {canPrune && (
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        title="Remove this page from the next run"
+                        aria-label={`Remove ${page.url} from the next run`}
+                        className="accent-amber-600 cursor-pointer"
+                        checked={removeSet.has(page.url)}
+                        onChange={() => toggleRemove(page.url)}
+                      />
+                    </td>
+                  )}
                   <td className="px-4 py-3 max-w-xs truncate text-slate-700 text-xs font-mono">
                     {page.url.replace(/^https?:\/\/[^/]+/, "")}
                   </td>
