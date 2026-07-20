@@ -1,5 +1,6 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
+import { checkProjectAccess } from "@/lib/auth/access";
 import { getProjectDetail, refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
 import { getScoresByJob } from "@/lib/db/client";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
@@ -25,6 +26,10 @@ export default async function ProjectHubPage({
 }: {
   params: { id: string };
 }) {
+  // Block the hub for anyone not in the project's company (no-op unless
+  // AUTH_ENFORCED). Not your company's project → back to the list.
+  const gate = await checkProjectAccess(params.id);
+  if (!gate.ok) redirect("/");
   const project = await getProjectDetail(params.id).catch(() => null);
   if (!project) return notFound();
 
