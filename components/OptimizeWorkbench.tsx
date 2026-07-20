@@ -8,7 +8,7 @@
 //  rewrite actions, and the latest simulation result.
 // ─────────────────────────────────────────────────────────────
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   ALL_DIMENSIONS,
@@ -156,6 +156,16 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   const [busy, setBusy] = useState<
     "" | "save" | "simulate" | "rewrite" | "research" | "generate" | "verify"
   >("");
+  // Seconds elapsed on whatever action is currently running, so every busy
+  // button can show a live "still working" timer. Resets each time a new
+  // action starts and stops ticking the moment busy clears.
+  const [busySecs, setBusySecs] = useState(0);
+  useEffect(() => {
+    if (busy === "") return;
+    setBusySecs(0);
+    const id = setInterval(() => setBusySecs((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
   const [verify, setVerify] = useState<VerifyResult | null>(null);
   const [error, setError] = useState<string>("");
   const [proposal, setProposal] = useState<{
@@ -425,10 +435,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
               className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50 transition-colors"
             >
               {busy === "verify" ? (
-                <span>
-                  <span className="inline-block w-3 h-3 mr-1.5 align-[-2px] rounded-full border-2 border-emerald-600 border-t-transparent animate-spin" />
-                  Verifying…
-                </span>
+                <Working label="Verifying…" secs={busySecs} />
               ) : (
                 "✓ Verify Published"
               )}
@@ -800,7 +807,11 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                   disabled={busy !== ""}
                   className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-500 disabled:opacity-40"
                 >
-                  {busy === "rewrite" ? "Writing…" : "✦ AI rewrite weakest 3"}
+                  {busy === "rewrite" ? (
+                    <Working label="Writing…" secs={busySecs} />
+                  ) : (
+                    "✦ AI rewrite weakest 3"
+                  )}
                 </button>
               )}
             </div>
@@ -862,7 +873,11 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                               disabled={busy !== ""}
                               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
                             >
-                              {busy === "rewrite" ? "Writing…" : `✦ AI Rewrite for ${DIMENSION_LABELS[dim]}`}
+                              {busy === "rewrite" ? (
+                                <Working label="Writing…" secs={busySecs} />
+                              ) : (
+                                `✦ AI Rewrite for ${DIMENSION_LABELS[dim]}`
+                              )}
                             </button>
                             {RESEARCH_DIMS[dim] && !research[dim] && (
                               <button
@@ -870,7 +885,11 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                 disabled={busy !== ""}
                                 className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
                               >
-                                {busy === "research" ? "Searching the web…" : RESEARCH_DIMS[dim]!.button}
+                                {busy === "research" ? (
+                                  <Working label="Searching the web…" secs={busySecs} />
+                                ) : (
+                                  RESEARCH_DIMS[dim]!.button
+                                )}
                               </button>
                             )}
                           </div>
@@ -939,13 +958,15 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                   }
                                   className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
                                 >
-                                  {busy === "generate"
-                                    ? "Writing…"
-                                    : `Generate Copy from Selected (${
-                                        research[dim]!.suggestions.filter(
-                                          (_, i) => checkedSug[`${dim}:${i}`]
-                                        ).length
-                                      })`}
+                                  {busy === "generate" ? (
+                                    <Working label="Writing…" secs={busySecs} />
+                                  ) : (
+                                    `Generate Copy from Selected (${
+                                      research[dim]!.suggestions.filter(
+                                        (_, i) => checkedSug[`${dim}:${i}`]
+                                      ).length
+                                    })`
+                                  )}
                                 </button>
                               </div>
                             </div>
@@ -966,7 +987,13 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
               disabled={busy !== "" || !dirty}
               className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition-colors"
             >
-              {busy === "save" ? "Saving…" : dirty ? "Save Draft" : "Saved"}
+              {busy === "save" ? (
+                <Working label="Saving…" secs={busySecs} />
+              ) : dirty ? (
+                "Save Draft"
+              ) : (
+                "Saved"
+              )}
             </button>
             <button
               onClick={simulate}
@@ -974,10 +1001,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
               className="flex-1 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
             >
               {busy === "simulate" ? (
-                <span>
-                  <span className="inline-block w-3 h-3 mr-1.5 align-[-2px] rounded-full border-2 border-white border-t-transparent animate-spin" />
-                  Simulating…
-                </span>
+                <Working label="Simulating…" secs={busySecs} />
               ) : (
                 "▶ Simulate Score"
               )}
@@ -1037,6 +1061,25 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
 }
 
 // ── Small components ──────────────────────────────────────────
+
+// Turning spinner that inherits the current text color (border-current), so it
+// reads correctly on both light buttons (slate/indigo text) and filled buttons
+// (white text). Used on every busy action to signal "still working".
+function Spinner() {
+  return (
+    <span className="inline-block w-3 h-3 mr-1.5 align-[-2px] rounded-full border-2 border-current border-t-transparent animate-spin" />
+  );
+}
+
+// A busy label: spinner + verb + live elapsed seconds (e.g. "Writing… 12s").
+function Working({ label, secs }: { label: string; secs: number }) {
+  return (
+    <span className="inline-flex items-center">
+      <Spinner />
+      {label} {secs}s
+    </span>
+  );
+}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
