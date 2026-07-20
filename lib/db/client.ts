@@ -482,3 +482,19 @@ function rowToScore(r: Record<string, unknown>): PageScore {
     scoredAt: new Date(r.scored_at as string),
   };
 }
+
+// ── AI-crawler access (stored per job) ────────────────────────
+
+/**
+ * Persist the AI-crawler access check result on an audit job. The column is
+ * created lazily (idempotent DDL) because this runs at audit START — before
+ * the scoring-path ensureSchemaPatches has necessarily ever executed.
+ */
+export async function setJobAiAccess(jobId: string, access: unknown): Promise<void> {
+  const sql = getDb();
+  await sql`ALTER TABLE audit_jobs ADD COLUMN IF NOT EXISTS ai_access JSONB`;
+  await sql`
+    UPDATE audit_jobs SET ai_access = ${JSON.stringify(access)}
+    WHERE id = ${jobId}
+  `;
+}
