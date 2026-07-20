@@ -2,6 +2,9 @@ import Link from "next/link";
 import { listProjects } from "@/lib/db/projects";
 import type { Project } from "@/lib/db/projects";
 import DeleteProjectButton from "@/components/DeleteProjectButton";
+import { authEnforced, seesAllProjects } from "@/lib/auth/config";
+import { getActiveUser } from "@/lib/auth/session";
+import { getGrantedProjectIds, getCompanyProjectIds, ensureAuthTables } from "@/lib/auth/store";
 
 export const revalidate = 0;
 
@@ -9,6 +12,25 @@ export default async function DashboardPage() {
   let projects: Project[] = [];
   try {
     projects = await listProjects();
+    // Company-scoped visibility (no-op unless AUTH_ENFORCED).
+    if (authEnforced()) {
+      const user = await getActiveUser();
+      if (!user) {
+        projects = [];
+      } else if (!seesAllProjects(user.role)) {
+        await ensureAuthTables();
+        const companyIds = new Set(user.cid ? await getCompanyProjectIds(user.cid) : []);
+        let allowed = projects.filter((p) => companyIds.has(p.id));
+        if (user.role === "client_user") {
+          const grants = await getGrantedProjectIds(user.sub);
+          if (grants.length) {
+            const g = new Set(grants);
+            allowed = allowed.filter((p) => g.has(p.id));
+          }
+        }
+        projects = allowed;
+      }
+    }
   } catch {
     // DB not yet configured
   }
