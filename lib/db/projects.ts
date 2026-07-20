@@ -149,6 +149,38 @@ export async function updateProject(
   return rows[0] ? rowToProject(rows[0]) : null;
 }
 
+/**
+ * Replace a project's audit-source configuration (mode + URL set) after
+ * creation. Deliberately NOT the COALESCE pattern of updateProject: switching
+ * modes must be able to null out scope_prefix / source_urls. Audit history
+ * (audit_jobs / page_scores) is untouched — the next run simply builds its
+ * client URL set from the new configuration.
+ */
+export async function updateProjectSource(
+  id: string,
+  data: {
+    auditSource: AuditSource;
+    websiteUrl: string;
+    scopePrefix: string | null;
+    maxPages: number;
+    sourceUrls: string[] | null;
+  }
+): Promise<Project | null> {
+  const sql = db();
+  const rows = await sql`
+    UPDATE projects SET
+      audit_source = ${data.auditSource},
+      website_url  = ${data.websiteUrl},
+      scope_prefix = ${data.scopePrefix},
+      max_pages    = ${data.maxPages},
+      source_urls  = ${data.sourceUrls ? JSON.stringify(data.sourceUrls) : null},
+      updated_at   = NOW()
+    WHERE id = ${id}
+    RETURNING *
+  `;
+  return rows[0] ? rowToProject(rows[0]) : null;
+}
+
 export async function deleteProject(id: string): Promise<void> {
   const sql = db();
   await sql`DELETE FROM projects WHERE id = ${id}`;
