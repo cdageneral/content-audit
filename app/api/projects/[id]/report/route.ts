@@ -73,6 +73,17 @@ export async function GET(req: NextRequest, { params }: Params) {
     }
     competitors.sort((a, b) => b.overall - a.overall);
 
+    // AI-crawler access from the client's latest checked run. Separate,
+    // error-tolerant query: the ai_access column is created lazily, so a DB
+    // that predates the feature must not break report generation.
+    let aiAccess: ReportData["aiAccess"] = null;
+    const accessRows = await sql`
+      SELECT ai_access FROM audit_jobs
+      WHERE project_id = ${params.id} AND competitor_id IS NULL AND ai_access IS NOT NULL
+      ORDER BY created_at DESC LIMIT 1
+    `.catch(() => [] as Record<string, unknown>[]);
+    aiAccess = (accessRows[0]?.ai_access as ReportData["aiAccess"]) ?? null;
+
     const data: ReportData = {
       project: detail,
       client,
@@ -81,6 +92,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       runDate,
       jobId: clientJobId,
       modelVersion: client.pages[0]?.modelVersion ?? null,
+      aiAccess,
     };
 
     const html = renderAssessmentHtml(data);
