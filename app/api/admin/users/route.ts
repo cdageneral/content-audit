@@ -30,7 +30,7 @@ import { clientIp, userAgent } from '@/lib/auth/audit';
 const CreateUser = z.object({
   name:       z.string().min(1).max(120),
   email:      z.string().email(),
-  role:       z.enum(['company_admin', 'client_user']).optional(),
+  role:       z.enum(['super_admin', 'company_admin', 'client_user']).optional(),
   companyId:  z.string().uuid().optional(),
   projectIds: z.array(z.string().uuid()).optional().default([]),
   password:   z.string().min(8).optional(),
@@ -75,12 +75,17 @@ export async function POST(req: NextRequest) {
   const { name, email, projectIds, password } = parsed.data;
 
   // Resolve the target role + company from who is acting.
-  let role: 'company_admin' | 'client_user';
-  let companyId: string;
+  // super_admins belong to no company (companyId null); everyone else does.
+  let role: 'super_admin' | 'company_admin' | 'client_user';
+  let companyId: string | null;
   if (actingRole === 'super_admin') {
     role = parsed.data.role ?? 'client_user';
-    if (!parsed.data.companyId) return NextResponse.json({ error: 'Choose a company for this user.' }, { status: 400 });
-    companyId = parsed.data.companyId;
+    if (role === 'super_admin') {
+      companyId = null; // peer admin — no company, no seat, no grants
+    } else {
+      if (!parsed.data.companyId) return NextResponse.json({ error: 'Choose a company for this user.' }, { status: 400 });
+      companyId = parsed.data.companyId;
+    }
   } else if (actingRole === 'company_admin') {
     role = 'client_user'; // company admins can only add client users
     if (!actingCompany) return NextResponse.json({ error: 'Your account is not attached to a company.' }, { status: 400 });
@@ -89,25 +94,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Admins only' }, { status: 403 });
   }
 
-  const company = await getCompanyById(companyId);
-  if (!company) return NextResponse.json({ error: 'Company not found' }, { status: 404 });
-
   if (await getUserByEmail(email)) {
     return NextResponse.json({ error: 'A user with that email already exists.' }, { status: 409 });
   }
 
-  // Seat enforcement (active + pending users count against the cap).
-  const used = await countCompanySeatsUsed(companyId);
-  if (used >= company.seatLimit) {
-    return NextResponse.json(
-      { error: `Seat limit reached — ${used} of ${company.seatLimit} used. Remove a user or raise this company's seats.` },
-      { status: 409 },
-    );
+  // Company + seat checks only apply to company-scoped users (not super_admins).
+  if (companyId) {
+    const company = await getCompanyById(companyId);
+    if (!company) return NextResponse.json({ error: 'Company not found' }, { status: 404 });
+    const used = await countCompanySeatsUsed(companyId);
+    if (used >= company.seatLimit) {
+      return NextResponse.json(
+        { error: `Seat limit reached — ${used} of ${company.seatLimit} used. Remove a user or raise this company's seats.` },
+        { status: 409 },
+      );
+    }
   }
 
   // A restriction set is only meaningful for client_user, and must be company projects.
   let grantIds: string[] = [];
-  if (role === 'client_user' && projectIds.length) {
+  if (role === 'client_user' && companyId && projectIds.length) {
     const companyProjects = new Set(await getCompanyProjectIds(companyId));
     const bad = projectIds.filter(p => !companyProjects.has(p));
     if (bad.length) return NextResponse.json({ error: 'Some selected projects do not belong to this company.' }, { status: 400 });
