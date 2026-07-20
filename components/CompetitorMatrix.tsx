@@ -14,6 +14,12 @@ interface Props {
   competitorColors: string[];
   /** Enables the drill-down drawer + gap-brief API calls when provided */
   projectId?: string;
+  /**
+   * Previous completed run's averages per site (key: 'client' or competitor
+   * id) — enables the ▲/▼ change tickers next to each score. Sites with
+   * fewer than two runs simply show no ticker.
+   */
+  prevRuns?: Record<string, { overall: number | null; dims: Partial<Record<ScoreDimension, number>> } | undefined>;
 }
 
 const DIMS: ScoreDimension[] = [
@@ -48,6 +54,29 @@ function scoreColor(s: number) {
   return "#dc2626";
 }
 
+/** ▲/▼ change vs the previous run. Renders nothing when unchanged or no prior run. */
+function Ticker({ now, prev, size = 10 }: { now: number | null; prev: number | null | undefined; size?: number }) {
+  if (now == null || prev == null) return null;
+  const d = now - prev;
+  if (d === 0) return null;
+  const up = d > 0;
+  return (
+    <span
+      title={`${up ? "Up" : "Down"} ${Math.abs(d)} vs previous run (${prev} → ${now})`}
+      style={{
+        fontSize: size,
+        fontWeight: 700,
+        color: up ? "#059669" : "#dc2626",
+        marginLeft: 4,
+        whiteSpace: "nowrap",
+        verticalAlign: "middle",
+      }}
+    >
+      {up ? "▲" : "▼"}{Math.abs(d)}
+    </span>
+  );
+}
+
 export default function CompetitorMatrix({
   clientName,
   clientScores,
@@ -55,6 +84,7 @@ export default function CompetitorMatrix({
   competitorScoresMap,
   competitorColors,
   projectId,
+  prevRuns,
 }: Props) {
   const [active, setActive] = useState<{ dim: ScoreDimension; siteId: string } | null>(null);
 
@@ -99,6 +129,7 @@ export default function CompetitorMatrix({
                   {s.overall != null && (
                     <span style={{ fontSize: 16, fontWeight: 700, color: scoreColor(s.overall) }}>
                       {s.overall}
+                      <Ticker now={s.overall} prev={prevRuns?.[s.id]?.overall} size={11} />
                     </span>
                   )}
                 </div>
@@ -163,6 +194,7 @@ export default function CompetitorMatrix({
                             color: score != null ? scoreColor(score) : "var(--text-3)",
                           }}>
                             {score}
+                            <Ticker now={score} prev={prevRuns?.[s.id]?.dims?.[dim]} />
                           </span>
                         ) : (
                           <span style={{ color: "var(--text-3)" }}>—</span>
@@ -191,6 +223,7 @@ export default function CompetitorMatrix({
                   {s.overall != null ? (
                     <span style={{ fontSize: 18, fontWeight: 700, color: scoreColor(s.overall) }}>
                       {s.overall}
+                      <Ticker now={s.overall} prev={prevRuns?.[s.id]?.overall} size={11} />
                     </span>
                   ) : <span style={{ color: "var(--text-3)" }}>—</span>}
                 </td>
@@ -203,7 +236,7 @@ export default function CompetitorMatrix({
       {/* Legend note */}
       <div className="px-4 py-3 text-xs" style={{ color: "var(--text-3)", borderTop: "1px solid var(--border)" }}>
         ✦ indicates best score in that dimension · Scores are page-level averages from the latest completed audit run
-        · Click any score to see the evidence behind it
+        · ▲▼ show change vs the previous run · Click any score to see the evidence behind it
       </div>
 
       {/* Drill-down drawer */}
