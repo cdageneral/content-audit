@@ -303,6 +303,8 @@ export default async function ProjectHubPage({
             summary={computeQuickSummary(clientScores)}
             competitorPages={competitorPageEntries}
             projectId={params.id}
+            auditSource={project.auditSource}
+            sourceUrls={project.sourceUrls}
           />
         </div>
       )}
