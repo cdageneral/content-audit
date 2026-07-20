@@ -183,7 +183,31 @@ export async function updateProjectSource(
 
 export async function deleteProject(id: string): Promise<void> {
   const sql = db();
-  await sql`DELETE FROM projects WHERE id = ${id}`;
+  // audit_jobs.project_id is a plain FK (no ON DELETE CASCADE), so a bare
+  // project delete throws audit_jobs_project_id_fkey once the project has
+  // been audited. Jobs go first — audit_pages and page_scores cascade off
+  // audit_jobs — and jobs also reference competitor_configs (competitor_id,
+  // no cascade), so they must precede the configs too. Same single-transaction
+  // pattern as deleteCompetitor: a partial failure can't orphan anything.
+  await sql.transaction([
+    sql`DELETE FROM audit_jobs WHERE project_id = ${id}`,
+    sql`DELETE FROM competitor_configs WHERE project_id = ${id}`,
+    sql`DELETE FROM projects WHERE id = ${id}`,
+  ]);
+  // Best-effort cleanup of the optimize/sandbox tables. They're FK-free (so
+  // they never block the delete, only orphan) and created lazily — run these
+  // OUTSIDE the transaction so a table that doesn't exist yet can't fail the
+  // whole delete.
+  const cleanups = [
+    () => sql`DELETE FROM page_drafts WHERE project_id = ${id}`,
+    () => sql`DELETE FROM draft_simulations WHERE project_id = ${id}`,
+    () => sql`DELETE FROM research_results WHERE project_id = ${id}`,
+    () => sql`DELETE FROM draft_verifications WHERE project_id = ${id}`,
+    () => sql`DELETE FROM gap_briefs WHERE project_id = ${id}`,
+  ];
+  for (const run of cleanups) {
+    await run().catch(() => null);
+  }
 }
 
 /** Called after an audit run completes to refresh the cached scores */
