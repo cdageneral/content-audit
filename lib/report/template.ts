@@ -14,6 +14,7 @@ import type {
   ScoreDimension,
 } from "@/lib/types";
 import type { ProjectDetail } from "@/lib/db/projects";
+import type { AiCrawlerAccess } from "@/lib/crawler/ai-access";
 
 // ── Data shapes ───────────────────────────────────────────────
 
@@ -38,6 +39,8 @@ export interface ReportData {
   runDate: Date | null;
   jobId: string | null;
   modelVersion: string | null;
+  /** robots.txt / llms.txt AI-crawler access check from the run (optional) */
+  aiAccess?: AiCrawlerAccess | null;
 }
 
 export const DIM_ORDER: ScoreDimension[] = [
@@ -331,6 +334,36 @@ const BUCKET_META: Record<IntentBucket, { tag: string; tagClass: string; example
 
 // ── The template ──────────────────────────────────────────────
 
+
+// ── AI-crawler access red-flag box (Section 01) ───────────────
+
+function aiAccessBox(ai: AiCrawlerAccess | null | undefined, siteUrl: string): string {
+  if (!ai || !ai.bots?.length) return "";
+  const host = siteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
+  const blocked = ai.bots.filter((b) => b.status === "blocked");
+  const partial = ai.bots.filter((b) => b.status === "partial");
+  const pills = ai.bots
+    .map(
+      (b) =>
+        `<span class="aipill ${b.status}">${esc(b.name)} ${
+          b.status === "allowed" ? "✓" : b.status === "blocked" ? "✕ blocked" : "◐ partial"
+        }</span>`
+    )
+    .join("");
+  const llms = `<span class="aipill ${ai.llmsTxtFound ? "allowed" : "missing"}">llms.txt ${
+    ai.llmsTxtFound ? "✓ present" : "— missing"
+  }</span>`;
+  const headline = blocked.length
+    ? `<b>Red flag: ${esc(host)} blocks ${blocked.length} of ${ai.bots.length} AI crawlers in robots.txt (${blocked
+        .map((b) => esc(b.name))
+        .join(", ")}).</b> A blocked engine cannot fetch these pages at answer time — no content improvement changes that until access is opened.`
+    : partial.length
+    ? `<b>${partial.length} AI crawler${partial.length === 1 ? " is" : "s are"} partially restricted in robots.txt.</b> Sections covered by those rules are invisible to the engines behind AI answers.`
+    : `<b>All ${ai.bots.length} major AI crawlers are permitted by robots.txt${ai.robotsFound ? "" : " (no robots.txt found — allowed by default)"}.</b> Crawler access is not the bottleneck — content readiness is.`;
+  const cls = blocked.length ? "bad" : partial.length ? "warn" : "ok";
+  return `<div class="aibox ${cls}"><h3>AI crawler access — checked from robots.txt</h3><p>${headline}</p><div class="aipills">${pills}${llms}</div></div>`;
+}
+
 export function renderAssessmentHtml(data: ReportData): string {
   const { project, client, competitors } = data;
   const w = project.weights;
@@ -517,6 +550,7 @@ export function renderAssessmentHtml(data: ReportData): string {
     <div class="dimbars">${bars}</div>
   </div>
   <div class="callout" style="margin-top:22px;"><b>Where to look first:</b> ${DIM_LABEL[weakDims[0]]} (${client.means[weakDims[0]]}) and ${DIM_LABEL[weakDims[1]]} (${client.means[weakDims[1]]}) are your two lowest scores${((w[weakDims[0]] ?? 0) as number) >= 0.15 ? `, and ${DIM_LABEL[weakDims[0]]} carries a ${wpct(weakDims[0])} weight — the maximum` : ""}. ${leader ? `The orange ticks show ${esc(leader.name)}'s average on each dimension${leaderDimLead === 8 ? " — they lead on all eight" : leaderDimLead > 0 ? ` — they lead on ${leaderDimLead} of eight` : ""}.` : ""}</div>
+  ${aiAccessBox(data.aiAccess, client.url)}
   __FOOT__
 </div>`);
   }
@@ -976,6 +1010,18 @@ const CSS = `
   .method td,.method th{border:1px solid var(--grid);padding:4px 8px;text-align:center;}
   .method th{background:#f6f5f2;font-weight:650;color:var(--ink-2);}
   @page{size:Letter;margin:0;}
+.aibox{margin-top:16px;border:1.5px solid #e1e0d9;border-radius:10px;padding:12px 16px;}
+.aibox.bad{border-color:#d03b3b;background:#fdf1f0;}
+.aibox.warn{border-color:#eda100;background:#fdf8ec;}
+.aibox.ok{border-color:#1baf7a;background:#f2faf6;}
+.aibox h3{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;margin:0 0 5px;color:#63615c;}
+.aibox p{font-size:12px;margin:0 0 8px;color:#2c2b28;line-height:1.5;}
+.aipills{display:flex;flex-wrap:wrap;gap:6px;}
+.aipill{font-size:10px;font-weight:600;border-radius:999px;padding:3px 10px;border:1px solid #d8d6ce;}
+.aipill.allowed{color:#0b7a55;border-color:#8fd8bd;background:#eafaf3;}
+.aipill.blocked{color:#a32020;border-color:#e39a94;background:#fbe9e7;}
+.aipill.partial{color:#8a6100;border-color:#ecc985;background:#fbf3df;}
+.aipill.missing{color:#63615c;border-color:#d8d6ce;background:#f4f3ee;}
   @media print{
     html,body{background:#fff;}
     .page{margin:0 auto;box-shadow:none;page-break-after:always;width:816px;min-height:1040px;}
