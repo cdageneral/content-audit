@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createProject, listProjects } from "@/lib/db/projects";
+import { authEnforced, seesAllProjects } from "@/lib/auth/config";
+import { getActiveUser } from "@/lib/auth/session";
+import { getGrantedProjectIds, getCompanyProjectIds, ensureAuthTables } from "@/lib/auth/store";
 
 const CreateSchema = z
   .object({
@@ -39,7 +42,29 @@ const CreateSchema = z
 
 export async function GET() {
   try {
-    const projects = await listProjects();
+    const all = await listProjects();
+    let projects = all;
+    // Company-scoped visibility (no-op unless AUTH_ENFORCED). super_admin sees
+    // all; company_admin/client_user see their company's projects (client_user
+    // further narrowed to their grant set when they have one).
+    if (authEnforced()) {
+      const user = await getActiveUser();
+      if (!user) {
+        projects = [];
+      } else if (!seesAllProjects(user.role)) {
+        await ensureAuthTables();
+        const companyIds = new Set(user.cid ? await getCompanyProjectIds(user.cid) : []);
+        let allowed = all.filter((p) => companyIds.has(p.id));
+        if (user.role === "client_user") {
+          const grants = await getGrantedProjectIds(user.sub);
+          if (grants.length) {
+            const g = new Set(grants);
+            allowed = allowed.filter((p) => g.has(p.id));
+          }
+        }
+        projects = allowed;
+      }
+    }
     return NextResponse.json({ projects });
   } catch (err) {
     console.error("[api/projects GET]", err);
@@ -70,6 +95,19 @@ export async function POST(req: NextRequest) {
     }
 
     const project = await createProject(projectData);
+
+    // Stamp the new project with the creator's company so it's visible to that
+    // company right away (super_admin leaves it unassigned → assign on the
+    // Admin → Companies tab). No-op unless AUTH_ENFORCED.
+    if (authEnforced()) {
+      const actor = await getActiveUser();
+      if (actor?.cid) {
+        const { db } = await import("@/db");
+        const { projects: authProjects } = await import("@/db/schema");
+        const { eq } = await import("drizzle-orm");
+        await db.update(authProjects).set({ companyId: actor.cid }).where(eq(authProjects.id, project.id));
+      }
+    }
 
     // Add competitors if provided
     if (competitors.length > 0) {
