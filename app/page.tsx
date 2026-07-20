@@ -40,11 +40,6 @@ export default async function DashboardPage() {
       {/* Hero */}
       <div className="px-6 pt-16 pb-10 max-w-6xl mx-auto">
         <div className="anim-fade-up text-center mb-12">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium mb-6"
-            style={{ background: "rgba(99,102,241,0.12)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.2)" }}>
-            <span className="status-dot status-running" />
-            Powered by Claude Sonnet
-          </div>
           <h1 className="text-5xl font-bold mb-4" style={{ color: "var(--text-1)", letterSpacing: "-0.02em" }}>
             LLM Content<br />
             <span style={{ background: "linear-gradient(135deg, #6366f1, #7c3aed)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
