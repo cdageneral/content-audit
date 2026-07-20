@@ -138,6 +138,50 @@ export default async function ProjectHubPage({
   // Median letter grade across the client's audited pages.
   const clientMedianGrade = medianGrade(clientScores);
 
+  // ── AI-crawler access (latest check for the client site) ──
+  // Written by the run route at audit start; column is lazily created, so a
+  // DB that has never run the new code just yields an empty result here.
+  type AiAccessData = {
+    checkedAt: string;
+    origin: string;
+    robotsFound: boolean;
+    llmsTxtFound: boolean;
+    bots: { name: string; status: "allowed" | "blocked" | "partial"; sampleRule: string | null }[];
+  };
+  const aiAccessRows = await sql`
+    SELECT ai_access FROM audit_jobs
+    WHERE project_id = ${params.id} AND competitor_id IS NULL AND ai_access IS NOT NULL
+    ORDER BY created_at DESC LIMIT 1
+  `.catch(() => [] as Record<string, unknown>[]);
+  const aiAccess = (aiAccessRows[0]?.ai_access ?? null) as AiAccessData | null;
+  const blockedBots = aiAccess?.bots.filter((b) => b.status === "blocked") ?? [];
+  const partialBots = aiAccess?.bots.filter((b) => b.status === "partial") ?? [];
+
+  // ── Previous-run averages per site (for the matrix ▲/▼ tickers) ──
+  // history is ordered ASC; the second-to-last point per site is "last run".
+  const prevRuns: Record<string, { overall: number | null; dims: Partial<Record<keyof DimensionScores, number>> }> = {};
+  {
+    const siteKeys: (string | null)[] = [null, ...project.competitors.map((c) => c.id)];
+    for (const key of siteKeys) {
+      const pts = project.history.filter((h) => (h.competitorId ?? null) === key);
+      if (pts.length < 2) continue;
+      const prev = pts[pts.length - 2];
+      prevRuns[key ?? "client"] = {
+        overall: Math.round(Number(prev.avgScore)),
+        dims: {
+          coreIntent: Math.round(Number(prev.avgCoreIntent)),
+          edgeCases: Math.round(Number(prev.avgEdgeCases)),
+          impliedQuestions: Math.round(Number(prev.avgImpliedQuestions)),
+          fanOutQueries: Math.round(Number(prev.avgFanOutQueries)),
+          retrievable: Math.round(Number(prev.avgRetrievable)),
+          extractable: Math.round(Number(prev.avgExtractable)),
+          citable: Math.round(Number(prev.avgCitable)),
+          reusable: Math.round(Number(prev.avgReusable)),
+        },
+      };
+    }
+  }
+
   // In-progress jobs (for status banner)
   // Only jobs created in the last 2 hours to avoid showing stale stuck jobs
   const activeJobs = await sql`
@@ -264,6 +308,81 @@ export default async function ProjectHubPage({
         <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />
       )}
 
+      {/* ── AI crawler access (robots.txt + llms.txt) ─────── */}
+      {aiAccess && (
+        <div
+          className="anim-fade-up card p-5"
+          style={
+            blockedBots.length
+              ? { border: "1px solid rgba(220,38,38,0.35)", background: "rgba(239,68,68,0.04)" }
+              : partialBots.length
+              ? { border: "1px solid rgba(217,119,6,0.35)", background: "rgba(245,158,11,0.04)" }
+              : undefined
+          }
+        >
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="min-w-[240px]">
+              <p className="section-label mb-1 flex items-center gap-1.5">
+                AI Crawler Access
+                <InfoTip
+                  title="AI Crawler Access"
+                  text="Checked from your site's robots.txt at the start of the last audit run: can the crawlers behind ChatGPT, Claude, Perplexity, and Google's AI training reach your pages? A blocked crawler cannot fetch your content at answer time — no content fix changes that until access is opened. llms.txt is an emerging standard file that gives AI systems a curated map of your site."
+                />
+              </p>
+              <p className="text-sm" style={{ color: blockedBots.length ? "#dc2626" : "var(--text-2)" }}>
+                {blockedBots.length ? (
+                  <>
+                    <span className="font-semibold">
+                      Your site blocks {blockedBots.length} of {aiAccess.bots.length} AI crawlers
+                    </span>{" "}
+                    in robots.txt — those engines can&apos;t fetch your pages at all.
+                  </>
+                ) : partialBots.length ? (
+                  <>
+                    <span className="font-semibold" style={{ color: "#d97706" }}>
+                      {partialBots.length} AI crawler{partialBots.length !== 1 ? "s are" : " is"} partially restricted
+                    </span>{" "}
+                    — some sections are invisible to those engines.
+                  </>
+                ) : (
+                  <>All {aiAccess.bots.length} major AI crawlers can access your site.</>
+                )}
+                {!aiAccess.robotsFound && " (No robots.txt found — crawlers are allowed by default.)"}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              {aiAccess.bots.map((b) => (
+                <span
+                  key={b.name}
+                  title={b.sampleRule ? `robots.txt: ${b.sampleRule}` : `No restricting rule for ${b.name}`}
+                  className="px-2.5 py-1 rounded-full text-xs font-semibold"
+                  style={
+                    b.status === "blocked"
+                      ? { background: "rgba(239,68,68,0.12)", color: "#dc2626", border: "1px solid rgba(239,68,68,0.3)" }
+                      : b.status === "partial"
+                      ? { background: "rgba(245,158,11,0.12)", color: "#b45309", border: "1px solid rgba(245,158,11,0.3)" }
+                      : { background: "rgba(16,185,129,0.10)", color: "#047857", border: "1px solid rgba(16,185,129,0.25)" }
+                  }
+                >
+                  {b.name} {b.status === "blocked" ? "✕ blocked" : b.status === "partial" ? "◐ partial" : "✓"}
+                </span>
+              ))}
+              <span
+                className="px-2.5 py-1 rounded-full text-xs font-semibold"
+                title={aiAccess.llmsTxtFound ? `${aiAccess.origin}/llms.txt exists` : "No llms.txt found — an emerging standard worth adding"}
+                style={
+                  aiAccess.llmsTxtFound
+                    ? { background: "rgba(16,185,129,0.10)", color: "#047857", border: "1px solid rgba(16,185,129,0.25)" }
+                    : { background: "var(--bg-2)", color: "var(--text-3)", border: "1px solid var(--border)" }
+                }
+              >
+                llms.txt {aiAccess.llmsTxtFound ? "✓ present" : "— missing"}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Score trend chart ──────────────────────────────── */}
       {project.history.length > 1 && (
         <div className="anim-fade-up stagger-1 card p-5">
@@ -289,6 +408,7 @@ export default async function ProjectHubPage({
             competitorScoresMap={latestScoresMap}
             competitorColors={COMPETITOR_COLORS}
             projectId={params.id}
+            prevRuns={prevRuns}
           />
         </div>
       )}
