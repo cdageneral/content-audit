@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 
 type AuditSource = "domain" | "single" | "list";
@@ -158,7 +159,10 @@ export default function EditAuditSourceButton(props: Props) {
         Edit URLs
       </button>
 
-      {open && (
+      {/* Portal to <body>: the hub header animates with a CSS transform, and a
+          transformed ancestor re-anchors position:fixed — rendered in place,
+          the overlay would center on the header instead of the viewport. */}
+      {open && typeof document !== "undefined" && createPortal(
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4"
           style={{ background: "rgba(15,23,42,0.55)" }}
@@ -322,7 +326,8 @@ export default function EditAuditSourceButton(props: Props) {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
