@@ -2,8 +2,9 @@
 // Triggers a new audit run for the client site and optionally all competitors
 import { NextRequest, NextResponse } from "next/server";
 import { getProjectDetail } from "@/lib/db/projects";
-import { createJob, updateJobStatus } from "@/lib/db/client";
+import { createJob, updateJobStatus, setJobAiAccess } from "@/lib/db/client";
 import { discoverUrls } from "@/lib/crawler/discover";
+import { checkAiCrawlerAccess } from "@/lib/crawler/ai-access";
 import { enqueueCrawlBatches } from "@/lib/queue/qstash";
 import { neon } from "@neondatabase/serverless";
 import { DEFAULT_WEIGHTS } from "@/lib/types";
@@ -46,6 +47,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       UPDATE audit_jobs SET project_id = ${project.id}, competitor_id = NULL
       WHERE id = ${clientJob.id}
     `;
+
+    // AI-crawler access check (robots.txt for GPTBot/ClaudeBot/PerplexityBot/
+    // Google-Extended + llms.txt). Two quick GETs; best-effort — never blocks
+    // the run.
+    const clientAccess = await checkAiCrawlerAccess(project.websiteUrl).catch(() => null);
+    if (clientAccess) {
+      await setJobAiAccess(clientJob.id, clientAccess).catch(() => null);
+    }
 
     // ── Build the client URL set by audit source ──────────────
     //   'single' → the one page (no discovery)
@@ -98,6 +107,11 @@ export async function POST(req: NextRequest, { params }: Params) {
           SET project_id = ${project.id}, competitor_id = ${competitor.id}
           WHERE id = ${compJob.id}
         `;
+
+        const compAccess = await checkAiCrawlerAccess(competitor.url).catch(() => null);
+        if (compAccess) {
+          await setJobAiAccess(compJob.id, compAccess).catch(() => null);
+        }
 
         await updateJobStatus(compJob.id, "discovering");
         const compUrls = await discoverUrls({
