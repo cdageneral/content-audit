@@ -500,14 +500,15 @@ function AddUserTab({ isSuper, companies, projects, onDone }: { isSuper: boolean
       {isSuper && (
         <div className="grid sm:grid-cols-2 gap-4 mt-4">
           <label className="block"><span className={labelCls}>Company</span>
-            <select value={companyId} onChange={e => setCompanyId(e.target.value)} required={role !== 'super_admin'} className={input}>
-              <option value="">— choose company —</option>
+            <select value={companyId} onChange={e => setCompanyId(e.target.value)} required={role !== 'super_admin'} disabled={role === 'super_admin'} className={input}>
+              <option value="">{role === 'super_admin' ? '— none (super admin) —' : '— choose company —'}</option>
               {companies.map(c => <option key={c.id} value={c.id}>{c.name} ({c.seatsUsed}/{c.seatLimit})</option>)}
             </select></label>
           <label className="block"><span className={labelCls}>Role</span>
             <select value={role} onChange={e => setRole(e.target.value as Role)} className={input}>
               <option value="client_user">Client user</option>
               <option value="company_admin">Company admin</option>
+              <option value="super_admin">Super admin (full access, no company)</option>
             </select></label>
         </div>
       )}
