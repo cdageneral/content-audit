@@ -499,7 +499,12 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                   </th>
                 )}
                 <th className="text-left px-4 py-3">URL</th>
-                <th className="text-left px-2 py-3">Buckets</th>
+                <th
+                  className="text-left px-2 py-3"
+                  title="Dot position = query type: 1 Recency · 2 Ranking · 3 Local · 4 Comparison"
+                >
+                  Query Type
+                </th>
                 <SortHeader label="Score" field="overallScore" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Intent" field="coreIntent" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Edges" field="edgeCases" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
@@ -536,23 +541,53 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                     {page.url.replace(/^https?:\/\/[^/]+/, "")}
                   </td>
                   <td className="px-2 py-3">
-                    <div className="flex items-center gap-1">
-                      {page.intentBuckets?.map((b) => (
-                        <span
-                          key={b}
-                          title={`${BUCKET_LABELS[b]}${page.primaryBucket === b ? " (primary)" : ""}`}
-                          className="inline-block rounded-full flex-shrink-0"
-                          style={{
-                            width: page.primaryBucket === b ? 10 : 7,
-                            height: page.primaryBucket === b ? 10 : 7,
-                            background: BUCKET_COLORS[b],
-                          }}
-                        />
-                      ))}
-                      {page.intentBuckets == null && (
-                        <span className="text-xs text-slate-300" title="Not yet classified">–</span>
-                      )}
-                    </div>
+                    {page.intentBuckets == null ? (
+                      <span className="text-xs text-slate-300" title="Not yet classified">–</span>
+                    ) : (
+                      /* Fixed 4-slot layout — dot POSITION encodes the query
+                         type (1 recency, 2 ranking, 3 local, 4 comparison),
+                         so types align vertically down the column. Empty
+                         slots keep a faint ring so the grid stays readable. */
+                      <div className="flex items-center gap-1.5">
+                        {ALL_BUCKETS.map((b) => {
+                          const has = page.intentBuckets!.includes(b);
+                          const primary = page.primaryBucket === b;
+                          return (
+                            <span
+                              key={b}
+                              title={
+                                has
+                                  ? `${BUCKET_LABELS[b]}${primary ? " (primary)" : ""}`
+                                  : `${BUCKET_LABELS[b]} — not detected`
+                              }
+                              className="inline-flex items-center justify-center flex-shrink-0"
+                              style={{ width: 10, height: 10 }}
+                            >
+                              {has ? (
+                                <span
+                                  className="inline-block rounded-full"
+                                  style={{
+                                    width: primary ? 10 : 7,
+                                    height: primary ? 10 : 7,
+                                    background: BUCKET_COLORS[b],
+                                  }}
+                                />
+                              ) : (
+                                <span
+                                  className="inline-block rounded-full"
+                                  style={{
+                                    width: 6,
+                                    height: 6,
+                                    border: "1px solid #e2e8f0",
+                                    background: "transparent",
+                                  }}
+                                />
+                              )}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
                   </td>
                   <td className="px-4 py-3 font-bold" style={{ color: scoreColor(page.overallScore) }}>
                     {page.overallScore}
