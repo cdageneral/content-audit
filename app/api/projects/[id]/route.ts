@@ -2,11 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { getProjectDetail, deleteProject, updateProjectSource } from "@/lib/db/projects";
 import type { AuditSource } from "@/lib/db/projects";
 import { getScoresByJob } from "@/lib/db/client";
+import { checkProjectAccess } from "@/lib/auth/access";
 
 type Params = { params: { id: string } };
 
 export async function GET(_req: NextRequest, { params }: Params) {
   try {
+    const gate = await checkProjectAccess(params.id);
+    if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
     const detail = await getProjectDetail(params.id);
     if (!detail) {
       return NextResponse.json({ error: "Project not found" }, { status: 404 });
@@ -47,6 +50,8 @@ export async function GET(_req: NextRequest, { params }: Params) {
 // the next run builds its URL set from the updated source.
 export async function PATCH(req: NextRequest, { params }: Params) {
   try {
+    const gate = await checkProjectAccess(params.id);
+    if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
     const body = await req.json().catch(() => ({} as Record<string, unknown>));
     const auditSource = body.auditSource as AuditSource;
     if (!["domain", "single", "list"].includes(auditSource)) {
@@ -128,6 +133,8 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
 export async function DELETE(_req: NextRequest, { params }: Params) {
   try {
+    const gate = await checkProjectAccess(params.id);
+    if (!gate.ok) return NextResponse.json({ error: gate.reason }, { status: gate.status });
     await deleteProject(params.id);
     return NextResponse.json({ ok: true });
   } catch (err) {
