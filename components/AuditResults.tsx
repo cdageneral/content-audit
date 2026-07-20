@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import {
   RadarChart,
@@ -69,6 +70,10 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
   const [selectedPage, setSelectedPage] = useState<PageScore | null>(null);
   const [bucketFilter, setBucketFilter] = useState<IntentBucket | null>(null);
+  // Instant hover tooltip for the Query Type dots (native title tooltips are
+  // delayed/unreliable). Portaled to <body>: the results section sits inside
+  // an anim-fade-up container whose transform re-anchors position:fixed.
+  const [dotTip, setDotTip] = useState<{ x: number; y: number; label: string } | null>(null);
 
   // ── Per-page "remove from next run" selection ───────────────────────────
   // Pruning converts the project's client URL set to an explicit list minus
@@ -552,14 +557,18 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                         {ALL_BUCKETS.map((b) => {
                           const has = page.intentBuckets!.includes(b);
                           const primary = page.primaryBucket === b;
+                          const tipLabel = has
+                            ? `${BUCKET_LABELS[b]}${primary ? " (primary)" : ""}`
+                            : `${BUCKET_LABELS[b]} — not detected`;
                           return (
                             <span
                               key={b}
-                              title={
-                                has
-                                  ? `${BUCKET_LABELS[b]}${primary ? " (primary)" : ""}`
-                                  : `${BUCKET_LABELS[b]} — not detected`
-                              }
+                              aria-label={tipLabel}
+                              onMouseEnter={(e) => {
+                                const r = e.currentTarget.getBoundingClientRect();
+                                setDotTip({ x: r.left + r.width / 2, y: r.top, label: tipLabel });
+                              }}
+                              onMouseLeave={() => setDotTip(null)}
                               className="inline-flex items-center justify-center flex-shrink-0"
                               style={{ width: 10, height: 10 }}
                             >
@@ -619,6 +628,22 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
           </table>
         </div>
       </div>
+
+      {/* Query Type dot tooltip (portaled to body — see dotTip comment) */}
+      {dotTip && typeof document !== "undefined" && createPortal(
+        <div
+          className="fixed z-50 pointer-events-none"
+          style={{ left: dotTip.x, top: dotTip.y - 8, transform: "translate(-50%, -100%)" }}
+        >
+          <span
+            className="rounded-md px-2 py-1 text-[11px] font-medium text-white whitespace-nowrap shadow-lg"
+            style={{ background: "#0f172a" }}
+          >
+            {dotTip.label}
+          </span>
+        </div>,
+        document.body
+      )}
 
       {/* Page detail drawer */}
       {selectedPage && (
