@@ -2,7 +2,7 @@ import Link from "next/link";
 import { listProjects } from "@/lib/db/projects";
 import type { Project } from "@/lib/db/projects";
 import DeleteProjectButton from "@/components/DeleteProjectButton";
-import { authEnforced, seesAllProjects } from "@/lib/auth/config";
+import { authEnforced, seesAllProjects, canReachAdmin } from "@/lib/auth/config";
 import { getActiveUser } from "@/lib/auth/session";
 import { getGrantedProjectIds, getCompanyProjectIds, ensureAuthTables } from "@/lib/auth/store";
 
@@ -10,11 +10,15 @@ export const revalidate = 0;
 
 export default async function DashboardPage() {
   let projects: Project[] = [];
+  // Only super admins and company admins can create projects. Open when the
+  // wall is off.
+  let canCreate = true;
   try {
     projects = await listProjects();
     // Company-scoped visibility (no-op unless AUTH_ENFORCED).
     if (authEnforced()) {
       const user = await getActiveUser();
+      canCreate = !!user && canReachAdmin(user.role);
       if (!user) {
         projects = [];
       } else if (!seesAllProjects(user.role)) {
@@ -49,13 +53,15 @@ export default async function DashboardPage() {
           <p className="text-lg max-w-xl mx-auto" style={{ color: "var(--text-2)" }}>
             Track how well your content — and your competitors' — performs when retrieved, cited, and reused by AI systems.
           </p>
-          <div className="mt-8">
-            <Link href="/projects/new"
-              className="btn-primary inline-flex items-center gap-2 px-6 py-3 text-base">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              New Project
-            </Link>
-          </div>
+          {canCreate && (
+            <div className="mt-8">
+              <Link href="/projects/new"
+                className="btn-primary inline-flex items-center gap-2 px-6 py-3 text-base">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                New Project
+              </Link>
+            </div>
+          )}
         </div>
 
         {/* Stats row */}
@@ -81,13 +87,13 @@ export default async function DashboardPage() {
 
         {/* Project grid */}
         {projects.length === 0 ? (
-          <EmptyState />
+          <EmptyState canCreate={canCreate} />
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {projects.map((p, i) => (
               <ProjectCard key={p.id} project={p} delay={i} />
             ))}
-            <NewProjectCard />
+            {canCreate && <NewProjectCard />}
           </div>
         )}
       </div>
@@ -205,7 +211,7 @@ function NewProjectCard() {
   );
 }
 
-function EmptyState() {
+function EmptyState({ canCreate }: { canCreate: boolean }) {
   return (
     <div className="anim-scale-in flex flex-col items-center justify-center py-24 text-center">
       <div className="w-20 h-20 rounded-2xl flex items-center justify-center mb-6"
@@ -216,9 +222,11 @@ function EmptyState() {
       </div>
       <h2 className="text-xl font-semibold mb-2" style={{ color: "var(--text-1)" }}>No projects yet</h2>
       <p className="mb-8 max-w-sm" style={{ color: "var(--text-2)" }}>
-        Create your first project to start auditing content and tracking LLM readiness scores over time.
+        {canCreate
+          ? "Create your first project to start auditing content and tracking LLM readiness scores over time."
+          : "No projects have been shared with your account yet. Your administrator will add them here."}
       </p>
-      <Link href="/projects/new" className="btn-primary">Create your first project</Link>
+      {canCreate && <Link href="/projects/new" className="btn-primary">Create your first project</Link>}
     </div>
   );
 }

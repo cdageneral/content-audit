@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
+import NavActions from "@/components/NavActions";
 
 export const metadata: Metadata = {
   title: "AI Content Audit Agent",
@@ -41,9 +42,9 @@ export default function RootLayout({
               <Link href="/" className="nav-link px-3 py-1.5 rounded-lg text-sm transition-colors">
                 Dashboard
               </Link>
-              <Link href="/projects/new" className="btn-primary ml-2 text-sm px-4 py-1.5">
-                + New Project
-              </Link>
+              {/* Route-aware actions (e.g. Download Assessment on a project page).
+                  "New Project" lives on the dashboard, gated to super/company admins. */}
+              <NavActions />
             </div>
           </div>
         </nav>
