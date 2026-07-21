@@ -11,6 +11,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useRouter } from 'next/navigation';
 
 const COMPETITOR_COLORS = ['#dc2626', '#ea580c', '#ca8a04', '#16a34a', '#0284c7'];
@@ -26,7 +27,9 @@ interface Competitor {
 
 export default function CompetitorManager({ projectId }: { projectId: string }) {
   const router = useRouter();
+  const [mounted, setMounted] = useState(false);
   const [open, setOpen] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const [competitors, setCompetitors] = useState<Competitor[]>([]);
   const [count, setCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
@@ -140,7 +143,7 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
         )}
       </button>
 
-      {open && (
+      {open && mounted && createPortal(
         <div
           className="fixed inset-0 z-[100] flex items-start justify-center p-4 sm:p-8 overflow-y-auto"
           style={{ background: 'rgba(15,23,42,0.55)', backdropFilter: 'blur(2px)' }}
@@ -233,7 +236,8 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
               </form>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
