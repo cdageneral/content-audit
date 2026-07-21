@@ -675,6 +675,22 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
             </div>
           </div>
 
+          {/* Save draft — directly under the editor. Always enabled (unless a
+              save/sim is already running) so it saves whatever is in the inputs,
+              including content typed or pasted in by hand. */}
+          <div className="flex items-center gap-3">
+            <button
+              onClick={saveDraft}
+              disabled={busy !== ""}
+              className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+            >
+              {busy === "save" ? <Working label="Saving…" secs={busySecs} /> : "Save Draft"}
+            </button>
+            <span className="text-[11px]" style={{ color: "var(--text-3)" }}>
+              {dirty ? "Unsaved changes" : activeDraftId ? "Draft saved" : "Baseline (unedited)"}
+            </span>
+          </div>
+
           {/* Parity note */}
           <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-[11.5px] leading-relaxed flex gap-2" style={{ color: "var(--text-2)" }}>
             <span className="text-emerald-600">●</span>
@@ -980,25 +996,13 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
             )}
           </div>
 
-          {/* Save + Simulate actions — sit directly under the dimension scores */}
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 flex items-center gap-2">
-            <button
-              onClick={saveDraft}
-              disabled={busy !== "" || !dirty}
-              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 transition-colors"
-            >
-              {busy === "save" ? (
-                <Working label="Saving…" secs={busySecs} />
-              ) : dirty ? (
-                "Save Draft"
-              ) : (
-                "Saved"
-              )}
-            </button>
+          {/* Simulate — runs the production scoring engine on the current draft
+              (auto-saves first). Save Draft now lives under the editor. */}
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
             <button
               onClick={simulate}
               disabled={busy !== ""}
-              className="flex-1 rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+              className="w-full rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
             >
               {busy === "simulate" ? (
                 <Working label="Simulating…" secs={busySecs} />
