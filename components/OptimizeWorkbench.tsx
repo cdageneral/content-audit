@@ -842,7 +842,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                   const simScore = activeSim ? activeSim.scores[dim] : null;
                   const open = expanded === dim;
                   const recs = baseline.recommendations.filter((r) => r.dimension === dim);
-                  const group = DIMENSION_GROUPS.contentQuality.indexOf(dim) !== -1 ? "Content Quality" : "The 4 Ables";
+                  const group = DIMENSION_GROUPS.contentQuality.indexOf(dim) !== -1 ? "Content Quality" : "AI Accessibility";
                   return (
                     <div key={dim} className={`border-b border-slate-100 last:border-b-0 ${open ? "bg-indigo-50/30" : ""}`}>
                       <button

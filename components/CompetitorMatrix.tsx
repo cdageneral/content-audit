@@ -32,10 +32,10 @@ const DIM_GROUP: Record<ScoreDimension, string> = {
   edgeCases: "Content quality",
   impliedQuestions: "Content quality",
   fanOutQueries: "Content quality",
-  retrievable: "The 4 Ables",
-  extractable: "The 4 Ables",
-  citable: "The 4 Ables",
-  reusable: "The 4 Ables",
+  retrievable: "AI Accessibility",
+  extractable: "AI Accessibility",
+  citable: "AI Accessibility",
+  reusable: "AI Accessibility",
 };
 
 function avg(scores: PageScore[], dim: ScoreDimension | "overall"): number | null {
