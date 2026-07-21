@@ -1,6 +1,12 @@
+import { redirect } from "next/navigation";
 import CreateProjectForm from "@/components/CreateProjectForm";
+import { checkAdmin } from "@/lib/auth/access";
 
-export default function NewProjectPage() {
+export default async function NewProjectPage() {
+  // Only super admins and company admins may create projects (no-op when the
+  // wall is off). Anyone else is sent back to their dashboard.
+  const gate = await checkAdmin();
+  if (!gate.ok) redirect("/");
   return (
     <div className="max-w-2xl mx-auto py-12 px-4">
       <div className="anim-fade-up mb-8">
