@@ -530,3 +530,108 @@ function rowToSim(r: Record<string, unknown>): DraftSimulation {
     createdAt: new Date(r.created_at as string),
   };
 }
+
+// ── Project-wide optimization state (for the hub) ─────────────
+//
+// Everything the All Pages list + Optimized-pages summary need to show what
+// has been worked on, WITHOUT touching real audit history. Keyed by URL (not
+// page_id) so it survives a re-audit — a new run mints fresh audit_pages rows
+// with new ids, but the URL is stable. Fully serializable (no Date objects):
+// this crosses the server→client boundary into the hub components.
+
+export interface PageOptimizeState {
+  url: string;
+  /** Most recently saved draft for this URL. */
+  draftId: string;
+  version: number;
+  /** How many draft versions have been saved for this URL. */
+  draftCount: number;
+  /** Latest simulation for this URL (null if a draft was saved but never simulated). */
+  simulationId: string | null;
+  simulatedOverall: number | null;
+  simulatedGrade: string | null;
+  /** Latest post-publish verification, if the page was ever verified. */
+  verified: boolean;
+  verifiedMatched: boolean | null;
+  verifiedOverall: number | null;
+}
+
+/**
+ * Every URL in this project that has at least one saved draft, mapped to its
+ * latest optimization state. Read-only, sandboxed — the audit pipeline never
+ * sees this. Returns {} on any error (old projects, transient DB issues) so the
+ * hub degrades to its normal baseline-only view rather than failing.
+ */
+export async function getProjectOptimizeStates(
+  projectId: string
+): Promise<Record<string, PageOptimizeState>> {
+  try {
+    await ensureOptimizeSchema();
+    const sql = db();
+
+    const [drafts, counts, sims, verifs] = await Promise.all([
+      // Latest draft per URL (most recent save wins across runs).
+      sql`
+        SELECT DISTINCT ON (url) url, id AS draft_id, version
+        FROM page_drafts
+        WHERE project_id = ${projectId}
+        ORDER BY url, created_at DESC
+      `,
+      sql`
+        SELECT url, COUNT(*)::int AS n
+        FROM page_drafts
+        WHERE project_id = ${projectId}
+        GROUP BY url
+      `,
+      // Latest simulation per URL.
+      sql`
+        SELECT DISTINCT ON (url) url, id AS simulation_id, overall_score, grade
+        FROM draft_simulations
+        WHERE project_id = ${projectId}
+        ORDER BY url, created_at DESC
+      `,
+      // Latest verification per URL (verifications have no url column — join
+      // through the draft they were run against).
+      sql`
+        SELECT DISTINCT ON (d.url) d.url, v.matched, v.real_overall
+        FROM draft_verifications v
+        JOIN page_drafts d ON d.id = v.draft_id
+        WHERE v.project_id = ${projectId}
+        ORDER BY d.url, v.created_at DESC
+      `,
+    ]);
+
+    const countByUrl = new Map<string, number>(
+      counts.map((r) => [r.url as string, (r.n as number) ?? 1])
+    );
+    const simByUrl = new Map<string, Record<string, unknown>>(
+      sims.map((r) => [r.url as string, r])
+    );
+    const verByUrl = new Map<string, Record<string, unknown>>(
+      verifs.map((r) => [r.url as string, r])
+    );
+
+    const out: Record<string, PageOptimizeState> = {};
+    for (const d of drafts) {
+      const url = d.url as string;
+      const sim = simByUrl.get(url);
+      const ver = verByUrl.get(url);
+      out[url] = {
+        url,
+        draftId: d.draft_id as string,
+        version: (d.version as number) ?? 1,
+        draftCount: countByUrl.get(url) ?? 1,
+        simulationId: (sim?.simulation_id as string) ?? null,
+        simulatedOverall: sim ? (sim.overall_score as number) : null,
+        simulatedGrade: sim ? (sim.grade as string) : null,
+        verified: !!ver,
+        verifiedMatched: ver ? (ver.matched as boolean) : null,
+        verifiedOverall: ver ? (ver.real_overall as number) : null,
+      };
+    }
+    return out;
+  } catch (err) {
+    console.error(`[getProjectOptimizeStates ${projectId}]`, err);
+    return {};
+  }
+}
