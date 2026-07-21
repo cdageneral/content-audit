@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createProject, listProjects } from "@/lib/db/projects";
-import { authEnforced, seesAllProjects } from "@/lib/auth/config";
+import { authEnforced, seesAllProjects, canReachAdmin } from "@/lib/auth/config";
 import { getActiveUser } from "@/lib/auth/session";
 import { getGrantedProjectIds, getCompanyProjectIds, ensureAuthTables } from "@/lib/auth/store";
 
@@ -74,6 +74,14 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    // Only super admins and company admins may create projects (no-op when the
+    // wall is off).
+    if (authEnforced()) {
+      const actor = await getActiveUser();
+      if (!actor || !canReachAdmin(actor.role)) {
+        return NextResponse.json({ error: "Only admins can create projects." }, { status: 403 });
+      }
+    }
     const body = await req.json();
     const parsed = CreateSchema.safeParse(body);
     if (!parsed.success) {
