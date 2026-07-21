@@ -12,7 +12,7 @@ Score every page on your website for **LLM readiness** across 8 dimensions — d
 | **Implied Questions** | Natural follow-ups answered inline |
 | **Fan-out Queries** | Connections to adjacent topics/knowledge |
 
-### The 4 Ables
+### AI Accessibility
 | Dimension | What it measures |
 |---|---|
 | **Retrievable** | Semantic clarity, heading hierarchy, topic signal |
