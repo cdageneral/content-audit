@@ -3,6 +3,7 @@ import Link from "next/link";
 import { checkProjectAccess } from "@/lib/auth/access";
 import { getProjectDetail, refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
 import { getScoresByJob } from "@/lib/db/client";
+import { getProjectOptimizeStates } from "@/lib/db/drafts";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
 import { DEFAULT_WEIGHTS } from "@/lib/types";
 import type { DimensionScores } from "@/lib/types";
@@ -13,6 +14,7 @@ import RunButton from "@/components/RunButton";
 import AddCompetitorForm from "@/components/AddCompetitorForm";
 import DeleteCompetitorButton from "@/components/DeleteCompetitorButton";
 import AuditResults from "@/components/AuditResults";
+import OptimizedSummary from "@/components/OptimizedSummary";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
 import EditAuditSourceButton from "@/components/EditAuditSourceButton";
@@ -106,6 +108,36 @@ export default async function ProjectHubPage({
 
   const clientScores = latestScoresMap["client"] ?? [];
   const hasResults = clientScores.length > 0;
+
+  // Optimization state (saved drafts / simulated scores / verifications) for
+  // this project's URLs. Read-only + sandboxed — drives the row badges and the
+  // Optimized-pages summary; returns {} on any error so the hub still renders.
+  const optimizeStates = hasResults
+    ? await getProjectOptimizeStates(params.id)
+    : {};
+  const optimizedRows = clientScores
+    .filter((s) => optimizeStates[s.url])
+    .map((s) => {
+      const st = optimizeStates[s.url];
+      return {
+        url: s.url,
+        pageId: s.pageId,
+        baseline: s.overallScore,
+        simulated: st.simulatedOverall,
+        grade: st.simulatedGrade,
+        version: st.version,
+        draftCount: st.draftCount,
+        draftId: st.draftId,
+        simulationId: st.simulationId,
+        verified: st.verified,
+        verifiedMatched: st.verifiedMatched,
+      };
+    })
+    .sort((a, b) => {
+      const da = a.simulated != null ? a.simulated - a.baseline : -Infinity;
+      const db = b.simulated != null ? b.simulated - b.baseline : -Infinity;
+      return db - da;
+    });
 
   // The CLIENT's latest done job. latestJobs[0] is NOT reliable here — the
   // DISTINCT ON ordering sorts competitor jobs first, and the classify
@@ -418,6 +450,14 @@ export default async function ProjectHubPage({
         </div>
       )}
 
+      {/* ── Optimized-pages summary (projected impact) ─────── */}
+      {hasResults && optimizedRows.length > 0 && (
+        <div className="anim-fade-up stagger-3">
+          <p className="section-label">Optimization progress — projected impact</p>
+          <OptimizedSummary projectId={params.id} rows={optimizedRows} />
+        </div>
+      )}
+
       {/* ── Full audit results (client) ────────────────────── */}
       {hasResults && (
         <div className="anim-fade-up stagger-3">
@@ -430,6 +470,7 @@ export default async function ProjectHubPage({
             projectId={params.id}
             auditSource={project.auditSource}
             sourceUrls={project.sourceUrls}
+            optimizeStates={optimizeStates}
           />
         </div>
       )}
