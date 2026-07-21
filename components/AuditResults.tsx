@@ -27,6 +27,7 @@ import {
   AI_FETCH_READINESS_BAR,
 } from "@/lib/types";
 import InfoTip from "@/components/InfoTip";
+import type { PageOptimizeState } from "@/lib/db/drafts";
 
 const BUCKET_COLORS: Record<IntentBucket, string> = {
   recency: "#d97706",     // amber — time-sensitive
@@ -61,9 +62,15 @@ interface Props {
    */
   auditSource?: "domain" | "single" | "list";
   sourceUrls?: string[] | null;
+  /**
+   * Per-URL optimization state (saved draft / simulated score / verification),
+   * keyed by full page URL. Read-only surfacing of Optimize-workbench work —
+   * drives the row badges. Absent on views with no optimize context.
+   */
+  optimizeStates?: Record<string, PageOptimizeState>;
 }
 
-export default function AuditResults({ job, scores, summary, competitorPages = [], projectId, auditSource, sourceUrls }: Props) {
+export default function AuditResults({ job, scores, summary, competitorPages = [], projectId, auditSource, sourceUrls, optimizeStates }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<"overallScore" | ScoreDimension>("overallScore");
@@ -613,13 +620,20 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                   </td>
                   {projectId && (
                     <td className="px-4 py-3">
-                      <a
-                        href={`/projects/${projectId}/optimize/${page.pageId}`}
+                      <div
+                        className="flex flex-col items-end gap-1"
                         onClick={(e) => e.stopPropagation()}
-                        className="inline-block rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors whitespace-nowrap"
                       >
-                        Optimize
-                      </a>
+                        {optimizeStates?.[page.url] && (
+                          <OptBadge baseline={page.overallScore} st={optimizeStates[page.url]} />
+                        )}
+                        <a
+                          href={`/projects/${projectId}/optimize/${page.pageId}`}
+                          className="inline-block rounded-lg border border-indigo-200 bg-indigo-50 px-2.5 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                        >
+                          {optimizeStates?.[page.url] ? "Review" : "Optimize"}
+                        </a>
+                      </div>
                     </td>
                   )}
                 </tr>
@@ -653,6 +667,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
           optimizeHref={
             projectId ? `/projects/${projectId}/optimize/${selectedPage.pageId}` : undefined
           }
+          optState={projectId ? optimizeStates?.[selectedPage.url] : undefined}
         />
       )}
     </div>
@@ -702,6 +717,65 @@ function ScoreChip({ score }: { score: number }) {
   return (
     <span style={{ color: scoreColor(score) }} className="font-mono font-medium">
       {score}
+    </span>
+  );
+}
+
+/**
+ * Compact optimization badge shown on a page row: the latest simulated score,
+ * its delta vs the current live score, and verification state. Baseline is the
+ * row's current audit score so the delta always reads "what publishing gains
+ * you now" — it stays honest even after a re-audit.
+ */
+function OptBadge({ baseline, st }: { baseline: number; st: PageOptimizeState }) {
+  const sim = st.simulatedOverall;
+  const d = sim != null ? sim - baseline : null;
+  const verifiedOk = st.verified && st.verifiedMatched === true;
+  const verifiedBad = st.verified && st.verifiedMatched === false;
+
+  const tip =
+    `Draft v${st.version}${st.draftCount > 1 ? ` · ${st.draftCount} versions` : ""} saved. ` +
+    (sim != null
+      ? `Simulated ${sim}${st.simulatedGrade ? ` (${st.simulatedGrade})` : ""}, ${
+          d! >= 0 ? "+" : ""
+        }${d} vs current ${baseline}. `
+      : "Not yet simulated. ") +
+    (verifiedOk
+      ? "Published & verified — live score matched the simulation."
+      : verifiedBad
+      ? "Verified: the published page didn't match this draft."
+      : "Not yet published/verified.");
+
+  const deltaColor = d == null ? "#64748b" : d > 0 ? "#059669" : d < 0 ? "#dc2626" : "#64748b";
+
+  return (
+    <span
+      title={tip}
+      className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10.5px] font-semibold leading-none"
+    >
+      {sim != null ? (
+        <>
+          <span className="text-slate-400 font-medium">sim</span>
+          <span style={{ color: scoreColor(sim) }}>{sim}</span>
+          {d != null && (
+            <span style={{ color: deltaColor }}>
+              {d > 0 ? `▲+${d}` : d < 0 ? `▼${d}` : "±0"}
+            </span>
+          )}
+        </>
+      ) : (
+        <span className="text-slate-500">Draft v{st.version}</span>
+      )}
+      {verifiedOk && (
+        <span style={{ color: "#059669" }} aria-label="Verified">
+          ✓
+        </span>
+      )}
+      {verifiedBad && (
+        <span style={{ color: "#d97706" }} aria-label="Verification mismatch">
+          ⚠
+        </span>
+      )}
     </span>
   );
 }
@@ -896,10 +970,12 @@ function PageDetail({
   page,
   onClose,
   optimizeHref,
+  optState,
 }: {
   page: PageScore;
   onClose: () => void;
   optimizeHref?: string;
+  optState?: PageOptimizeState;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -929,6 +1005,45 @@ function PageDetail({
             ×
           </button>
         </div>
+
+        {optState && (
+          <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-slate-600 flex items-center gap-2 flex-wrap">
+            <span className="font-semibold text-indigo-700">Optimization in progress</span>
+            <span className="text-slate-400">·</span>
+            <span>
+              Draft v{optState.version}
+              {optState.draftCount > 1 ? ` (${optState.draftCount} versions)` : ""} saved
+            </span>
+            {optState.simulatedOverall != null && (
+              <>
+                <span className="text-slate-400">·</span>
+                <span>
+                  simulated{" "}
+                  <span className="font-bold" style={{ color: scoreColor(optState.simulatedOverall) }}>
+                    {optState.simulatedOverall}
+                  </span>
+                  {(() => {
+                    const d = optState.simulatedOverall! - page.overallScore;
+                    return (
+                      <span
+                        className="ml-1 font-semibold"
+                        style={{ color: d > 0 ? "#059669" : d < 0 ? "#dc2626" : "#64748b" }}
+                      >
+                        ({d >= 0 ? "+" : ""}{d} vs current {page.overallScore})
+                      </span>
+                    );
+                  })()}
+                </span>
+              </>
+            )}
+            {optState.verified && optState.verifiedMatched === true && (
+              <span className="font-semibold" style={{ color: "#059669" }}>· ✓ verified</span>
+            )}
+            {optState.verified && optState.verifiedMatched === false && (
+              <span className="font-semibold" style={{ color: "#d97706" }}>· ⚠ verify mismatch</span>
+            )}
+          </div>
+        )}
 
         {page.intentBuckets != null && (
           <div className="space-y-2">
