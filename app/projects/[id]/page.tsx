@@ -11,8 +11,6 @@ import { neon } from "@neondatabase/serverless";
 import TrendChart from "@/components/TrendChart";
 import CompetitorMatrix from "@/components/CompetitorMatrix";
 import RunButton from "@/components/RunButton";
-import AddCompetitorForm from "@/components/AddCompetitorForm";
-import DeleteCompetitorButton from "@/components/DeleteCompetitorButton";
 import AuditResults from "@/components/AuditResults";
 import OptimizedSummary from "@/components/OptimizedSummary";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
@@ -461,57 +459,8 @@ export default async function ProjectHubPage({
         </div>
       )}
 
-      {/* ── Bottom row: competitors + add ─────────────────── */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6 anim-fade-up stagger-4">
-        {/* Competitor list */}
-        <div className="card p-5">
-          <p className="section-label">Tracked competitors</p>
-          {project.competitors.length === 0 ? (
-            <p className="text-sm" style={{ color: "var(--text-3)" }}>
-              No competitors added yet. Add one below to start comparing.
-            </p>
-          ) : (
-            <div className="space-y-3">
-              {project.competitors.map((c) => (
-                <div key={c.id} className="group flex items-center gap-3 p-3 rounded-lg"
-                  style={{ background: "var(--bg-2)" }}>
-                  <div className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                    style={{ background: COMPETITOR_COLORS[c.colorIndex] }} />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium truncate" style={{ color: "var(--text-1)" }}>
-                      {c.name}
-                    </p>
-                    <p className="text-xs font-mono truncate" style={{ color: "var(--text-3)" }}>
-                      {c.url.replace(/^https?:\/\//, "")}
-                    </p>
-                  </div>
-                  {c.latestScore != null ? (
-                    <div className="text-right flex-shrink-0">
-                      <span className="text-lg font-bold" style={{ color: scoreColor(c.latestScore) }}>
-                        {c.latestScore}
-                      </span>
-                      {c.scoreDelta != null && (
-                        <div className={`text-xs ${c.scoreDelta > 0 ? "trend-up" : c.scoreDelta < 0 ? "trend-down" : "trend-flat"}`}>
-                          {c.scoreDelta > 0 ? "+" : ""}{c.scoreDelta}
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <span className="text-xs" style={{ color: "var(--text-3)" }}>Not audited</span>
-                  )}
-                  <DeleteCompetitorButton projectId={params.id} competitorId={c.id} name={c.name} />
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {/* Add competitor */}
-        <div className="card p-5">
-          <p className="section-label">Add a competitor</p>
-          <AddCompetitorForm projectId={params.id} />
-        </div>
-      </div>
+      {/* Competitor management moved to the "Competitors" button in the top nav
+          (see components/CompetitorManager.tsx). */}
     </div>
   );
 }
