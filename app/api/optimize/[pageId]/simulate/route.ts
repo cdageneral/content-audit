@@ -24,6 +24,7 @@ import {
   countRecentSimulations,
 } from "@/lib/db/drafts";
 import { draftToCrawledPage } from "@/lib/optimize/transform";
+import { getSerpScoringContext } from "@/lib/serp/context";
 import {
   scorePage,
   computeContentHash,
@@ -77,7 +78,10 @@ export async function POST(req: NextRequest, { params }: Params) {
       bundle.page.httpStatus
     );
 
-    const contentHash = computeContentHash(simPage, weights);
+    // Same verified-SERP context lookup as the production scorer — parity is
+    // what makes a simulated number reproducible by the next real audit.
+    const serpContext = await getSerpScoringContext(bundle.page.url);
+    const contentHash = computeContentHash(simPage, weights, serpContext);
 
     // Exact-match reuse: unchanged input ⇒ stored score, zero cost, perfect
     // parity (this is also how "simulate without editing" proves the tool
@@ -114,7 +118,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         );
       }
 
-      const scored = await scorePage(simPage, params.pageId, weights, contentHash);
+      const scored = await scorePage(simPage, params.pageId, weights, contentHash, serpContext);
       if (scored.modelVersion === "error") {
         return NextResponse.json(
           { error: "Scoring failed — please try again" },
