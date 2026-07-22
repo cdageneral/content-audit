@@ -75,6 +75,26 @@ export async function enqueueScoreBatch(msg: ScoreBatchMessage): Promise<void> {
   });
 }
 
+// ── Dispatch a SERP-visibility batch (AIO/PAA detection) ─────
+
+export interface SerpBatchMessage {
+  jobId: string;
+  pageIds: string[];
+  database: string;
+}
+
+export async function enqueueSerpBatch(msg: SerpBatchMessage): Promise<void> {
+  const client = getClient();
+  const endpoint = `${getBaseUrl()}/api/webhook/qstash`;
+
+  await client.publishJSON({
+    url: endpoint,
+    body: { type: "serp_batch", ...msg },
+    retries: 2,
+    delay: 2,
+  });
+}
+
 // ── Dispatch a classification-only batch (backfill) ───────────
 
 export async function enqueueClassifyBatch(msg: ClassifyBatchMessage): Promise<void> {
