@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { neon } from "@neondatabase/serverless";
 import { checkProjectAccess } from "@/lib/auth/access";
 import { serpConfigured } from "@/lib/serp/semrush";
+import { dfsConfigured } from "@/lib/serp/dataforseo";
 import { dispatchSerpBatches } from "@/lib/serp/dispatch";
 
 export const dynamic = "force-dynamic";
@@ -27,11 +28,11 @@ export async function POST(_req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    if (!serpConfigured()) {
+    if (!serpConfigured() && !dfsConfigured()) {
       return NextResponse.json(
         {
           error:
-            "Search visibility isn't configured yet — add SEMRUSH_API_KEY to enable AIO/PAA detection.",
+            "Search visibility isn't configured yet — add DATAFORSEO_LOGIN + DATAFORSEO_PASSWORD (or SEMRUSH_API_KEY) to enable AIO/PAA detection.",
         },
         { status: 501 }
       );
