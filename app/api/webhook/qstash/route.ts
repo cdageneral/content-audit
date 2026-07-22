@@ -28,6 +28,12 @@ import {
   isBrandedKeyword,
 } from "@/lib/serp/semrush";
 import { insertSnapshot, findMonthlySnapshot } from "@/lib/db/serp";
+import type { OccupantInput } from "@/lib/db/serp";
+import {
+  dfsConfigured,
+  fetchUrlKeywordsDfs,
+  fetchSerpLiveDfs,
+} from "@/lib/serp/dataforseo";
 import { getSerpScoringContext } from "@/lib/serp/context";
 import { dispatchSerpBatches } from "@/lib/serp/dispatch";
 import { neon } from "@neondatabase/serverless";
@@ -474,7 +480,7 @@ async function handleScoreBatch(
         // Client jobs only for now (competitor overlap is Phase 5). Fully
         // env-gated: without SEMRUSH_API_KEY nothing is dispatched and the
         // audit pipeline is byte-for-byte unaffected.
-        if (serpConfigured()) {
+        if (serpConfigured() || dfsConfigured()) {
           try {
             await dispatchSerpBatches(
               jobId,
@@ -498,6 +504,12 @@ async function handleScoreBatch(
 // as per-(page,job) snapshots; monthly cache avoids re-spending API units.
 
 const SERP_KEYWORDS_PER_URL = parseInt(process.env.SERP_KEYWORDS_PER_URL ?? "25", 10);
+// Live Google SERP scrapes per page (DataForSEO): primary keyword + the
+// highest-volume AIO-triggered keywords. Each scrape yields the AI Overview
+// citation list, verbatim PAA questions with sources, and the organic top.
+const SERP_LIVE_PER_PAGE = parseInt(process.env.SERP_LIVE_PER_PAGE ?? "3", 10);
+// Per-run spend ceiling in USD for DataForSEO (real cost from API responses).
+const SERP_COST_CAP_USD = parseFloat(process.env.SERP_COST_CAP_USD ?? "10");
 const SERP_QUESTIONS_PER_PAGE = parseInt(process.env.SERP_QUESTIONS_PER_PAGE ?? "15", 10);
 const SERP_UNIT_CAP_PER_RUN = parseInt(process.env.SERP_UNIT_CAP_PER_RUN ?? "15000", 10);
 
@@ -510,8 +522,8 @@ async function handleSerpBatch(
 ): Promise<void> {
   const { jobId, pageIds, database } = msg;
 
-  if (!serpConfigured()) {
-    console.warn(`[serp] Job ${jobId}: SEMRUSH_API_KEY not set — skipping.`);
+  if (!serpConfigured() && !dfsConfigured()) {
+    console.warn(`[serp] Job ${jobId}: no SERP provider configured — skipping.`);
     return;
   }
 
@@ -565,32 +577,114 @@ async function handleSerpBatch(
           reusedFrom: prior.id,
           keywords: prior.keywords,
           questions: prior.questions,
+          occupants: prior.occupants,
         });
         cached++;
         continue;
       }
 
-      const { rows, unitsSpent: kwUnits } = await fetchUrlKeywords(
-        page.url,
-        database,
-        SERP_KEYWORDS_PER_URL
-      );
-      unitsSpent += kwUnits;
+      const useDfs = dfsConfigured();
+      let rows;
+      let kwUnits = 0;
+      let costUsd = 0;
+
+      if (useDfs) {
+        const res = await fetchUrlKeywordsDfs(page.url, database, SERP_KEYWORDS_PER_URL);
+        rows = res.rows;
+        costUsd += res.costUsd;
+      } else {
+        const res = await fetchUrlKeywords(page.url, database, SERP_KEYWORDS_PER_URL);
+        rows = res.rows;
+        kwUnits = res.unitsSpent;
+        unitsSpent += kwUnits;
+      }
 
       const primaryKeyword = pickPrimaryKeyword(rows);
+      const pageHost = new URL(page.url).hostname.replace(/^www\./, "");
+      const headingText = (page.headings ?? [])
+        .map((h: unknown) =>
+          typeof h === "string" ? h : String((h as { text?: string })?.text ?? "")
+        )
+        .map(normalizeQ);
 
-      let questions: { question: string; volume: number; covered: boolean }[] = [];
-      if (primaryKeyword && unitsSpent < SERP_UNIT_CAP_PER_RUN) {
+      let questions: {
+        question: string;
+        volume: number;
+        covered: boolean;
+        sourceUrl?: string;
+        sourceDomain?: string;
+      }[] = [];
+      const occupants: OccupantInput[] = [];
+
+      if (useDfs) {
+        // Live SERPs: primary keyword first, then the biggest AIO-triggered
+        // keywords — that is where "who is winning it" matters most.
+        const targets: string[] = [];
+        if (primaryKeyword) targets.push(primaryKeyword);
+        for (const r of rows) {
+          if (targets.length >= SERP_LIVE_PER_PAGE) break;
+          if (r.aioTriggered && targets.indexOf(r.keyword) === -1) targets.push(r.keyword);
+        }
+
+        for (const kw of targets) {
+          if (costUsd >= SERP_COST_CAP_USD) break;
+          const live = await fetchSerpLiveDfs(kw, database);
+          costUsd += live.costUsd;
+          const row = rows.find((r) => r.keyword === kw);
+
+          // AI Overview citations → occupants + refined cited flag.
+          if (live.aioPresent && row) row.aioTriggered = true;
+          live.aioRefs.forEach((ref, i) => {
+            const isClient = ref.domain.replace(/^www\./, "") === pageHost;
+            occupants.push({
+              keyword: kw,
+              feature: 52,
+              rank: i + 1,
+              domain: ref.domain,
+              url: ref.url,
+              title: ref.title,
+              isClient,
+            });
+            if (isClient && row && ref.url.replace(/\/$/, "") === page.url.replace(/\/$/, "")) {
+              row.aioCited = true;
+            }
+          });
+
+          // Verbatim PAA questions (primary keyword feeds the question list).
+          live.paaQuestions.forEach((q, i) => {
+            const srcHost = q.sourceDomain.replace(/^www\./, "");
+            const ownedByPage =
+              srcHost === pageHost && q.sourceUrl.replace(/\/$/, "") === page.url.replace(/\/$/, "");
+            if (row && q.question) row.paaPresent = true;
+            if (ownedByPage && row) row.paaOwned = true;
+            occupants.push({
+              keyword: kw,
+              feature: 21,
+              rank: i + 1,
+              domain: q.sourceDomain,
+              url: q.sourceUrl,
+              title: q.question,
+              isClient: srcHost === pageHost,
+            });
+            if (kw === primaryKeyword && questions.length < SERP_QUESTIONS_PER_PAGE) {
+              const nq = normalizeQ(q.question);
+              questions.push({
+                question: q.question,
+                volume: 0, // live PAA boxes carry no volume; verbatim > volume here
+                covered:
+                  ownedByPage ||
+                  headingText.some((h) => h.length > 0 && (h.includes(nq) || nq.includes(h))),
+                sourceUrl: q.sourceUrl,
+                sourceDomain: q.sourceDomain,
+              });
+            }
+          });
+        }
+      } else if (primaryKeyword && unitsSpent < SERP_UNIT_CAP_PER_RUN) {
+        // Semrush fallback: question-form queries as PAA proxy (no occupants).
         const q = await fetchQuestions(primaryKeyword, database, SERP_QUESTIONS_PER_PAGE);
         unitsSpent += q.unitsSpent;
-        // Covered = the URL already ranks for the question, or a heading on
-        // the page states it. Deterministic string checks — no model.
         const rankedSet = new Set(rows.map((r) => normalizeQ(r.keyword)));
-        const headingText = (page.headings ?? [])
-          .map((h: unknown) =>
-            typeof h === "string" ? h : String((h as { text?: string })?.text ?? "")
-          )
-          .map(normalizeQ);
         questions = q.rows.map((qr) => {
           const nq = normalizeQ(qr.question);
           const covered =
@@ -607,18 +701,20 @@ async function handleSerpBatch(
         database,
         primaryKeyword,
         unitsSpent: kwUnits,
+        costUsd,
         keywords: rows.map((r) => ({
           ...r,
           branded: isBrandedKeyword(r.keyword, clientName),
         })),
         questions,
+        occupants,
       });
       done++;
     } catch (err) {
       const emsg = String(err);
       // A dead key / zero unit balance fails every page identically — stop
       // the batch instead of burning retries page by page.
-      if (/UNITS|WRONG KEY|LIMIT EXCEEDED/i.test(emsg)) {
+      if (/UNITS|WRONG KEY|LIMIT EXCEEDED|40100|40200|40201|Payment Required|credentials not set/i.test(emsg)) {
         console.error(`[serp] Job ${jobId}: Semrush account error — stopping batch: ${emsg}`);
         return;
       }
