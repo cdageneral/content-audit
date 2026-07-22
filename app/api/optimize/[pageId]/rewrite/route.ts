@@ -173,6 +173,8 @@ async function loadAuditContext(
     extractable: "score_extractable",
     citable: "score_citable",
     reusable: "score_reusable",
+    aioReadiness: "score_aio_readiness",
+    paaCoverage: "score_paa_coverage",
   };
   const rationale = (r.rationale as Record<string, string>) ?? {};
   const evidence = (r.evidence as Record<string, string[]>) ?? {};
