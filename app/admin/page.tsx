@@ -14,7 +14,7 @@
 
 import { useEffect, useState, useCallback, Fragment } from 'react';
 
-const BRAND = 'Content Audit';
+const BRAND = 'Meridian';
 
 type Role = 'super_admin' | 'company_admin' | 'client_user';
 type Status = 'active' | 'pending' | 'suspended';
@@ -112,6 +112,15 @@ export default function AdminPage() {
       <nav className="border-b border-slate-200 bg-white sticky top-0 z-40">
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
+            <svg viewBox="0 0 100 100" fill="none" className="w-6 h-6" aria-hidden="true">
+              <circle cx="50" cy="48" r="31" stroke="#14284a" strokeWidth={5} />
+              <polygon points="50,20 55,48 45,48" fill="#2563eb" />
+              <polygon points="45,48 55,48 50,76" fill="#14284a" />
+              <circle cx="50" cy="48" r={4.5} fill="#ffffff" />
+              <rect x="56" y="56" width="6" height="10" rx="1.5" fill="#7aa8e8" />
+              <rect x="64" y="49" width="6" height="17" rx="1.5" fill="#4f8ae0" />
+              <rect x="72" y="42" width="6" height="24" rx="1.5" fill="#2563eb" />
+            </svg>
             <span className="text-lg font-bold">{BRAND}</span>
             <span className="text-[10px] uppercase tracking-wider text-slate-400 border border-slate-200 rounded px-2 py-0.5">Admin</span>
           </div>
