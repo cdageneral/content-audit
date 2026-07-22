@@ -51,6 +51,8 @@ const DIRECTIVES: Partial<Record<ScoreDimension, string>> = {
     "Search for adjacent subtopics and closely related queries around this topic — the neighboring subjects a strong page on this topic should reference or link to.",
   citable:
     "Search for authoritative, citable sources on this topic — official documentation, standards bodies, peer-reviewed or institutional research, and primary-source industry reports worth citing inline.",
+  paaCoverage:
+    "Search for the exact question-form queries people ask about this topic — 'People Also Ask' questions, question keywords with search volume, FAQ and forum questions. Prefer questions phrased the way searchers actually type them (what is / how does / how much / can I).",
 };
 
 export async function POST(req: NextRequest, { params }: Params) {
