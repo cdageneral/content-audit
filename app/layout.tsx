@@ -4,8 +4,14 @@ import "./globals.css";
 import NavActions from "@/components/NavActions";
 
 export const metadata: Metadata = {
-  title: "AI Content Audit Agent",
-  description: "Score and optimize your content for LLM readiness",
+  title: "Meridian — LLM Content Readiness",
+  description: "Meridian scores and optimizes your content for how AI systems retrieve, cite, and reuse it.",
+  icons: { icon: "/icon.svg" },
+  openGraph: {
+    title: "Meridian — LLM Content Readiness",
+    description: "Meridian scores and optimizes your content for how AI systems retrieve, cite, and reuse it.",
+    images: ["/meridian-logo.png"],
+  },
 };
 
 export default function RootLayout({
@@ -20,16 +26,18 @@ export default function RootLayout({
           <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
             {/* Logo + wordmark */}
             <Link href="/" className="flex items-center gap-3" style={{ textDecoration: "none" }}>
-              <div className="flex h-8 w-8 items-center justify-center rounded-lg flex-shrink-0"
-                style={{ background: "linear-gradient(135deg, #6366f1 0%, #4f46e5 100%)" }}>
-                <svg viewBox="0 0 24 24" fill="none" className="h-4 w-4" stroke="white" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round"
-                    d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25z" />
-                </svg>
-              </div>
+              <svg viewBox="0 0 100 100" fill="none" className="h-8 w-8 flex-shrink-0" aria-hidden="true">
+                <circle cx="50" cy="48" r="31" stroke="#14284a" strokeWidth={5} />
+                <polygon points="50,20 55,48 45,48" fill="#2563eb" />
+                <polygon points="45,48 55,48 50,76" fill="#14284a" />
+                <circle cx="50" cy="48" r={4.5} fill="#ffffff" />
+                <rect x="56" y="56" width="6" height="10" rx="1.5" fill="#7aa8e8" />
+                <rect x="64" y="49" width="6" height="17" rx="1.5" fill="#4f8ae0" />
+                <rect x="72" y="42" width="6" height="24" rx="1.5" fill="#2563eb" />
+              </svg>
               <div>
                 <p className="text-sm font-semibold leading-none" style={{ color: "var(--text-1)" }}>
-                  Content Audit Agent
+                  Meridian
                 </p>
                 <p className="text-xs leading-none mt-0.5" style={{ color: "var(--text-3)" }}>
                   LLM Readiness
