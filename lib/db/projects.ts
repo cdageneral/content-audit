@@ -204,6 +204,9 @@ export async function deleteProject(id: string): Promise<void> {
     () => sql`DELETE FROM research_results WHERE project_id = ${id}`,
     () => sql`DELETE FROM draft_verifications WHERE project_id = ${id}`,
     () => sql`DELETE FROM gap_briefs WHERE project_id = ${id}`,
+    () => sql`DELETE FROM serp_keywords WHERE snapshot_id IN (SELECT id FROM serp_snapshots WHERE project_id = ${id})`,
+    () => sql`DELETE FROM serp_questions WHERE snapshot_id IN (SELECT id FROM serp_snapshots WHERE project_id = ${id})`,
+    () => sql`DELETE FROM serp_snapshots WHERE project_id = ${id}`,
   ];
   for (const run of cleanups) {
     await run().catch(() => null);
