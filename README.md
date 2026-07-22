@@ -1,4 +1,4 @@
-# AI Content Audit Agent
+# Meridian
 
 Score every page on your website for **LLM readiness** across 8 dimensions — deployed on Vercel, powered by Claude.
 
