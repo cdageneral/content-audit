@@ -847,7 +847,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                     ? "Content Quality"
                     : DIMENSION_GROUPS.searchVisibility.indexOf(dim) !== -1
                     ? "Search Visibility"
-                    : "The 4 Ables";
+                    : "AI Accessibility";
                   return (
                     <div key={dim} className={`border-b border-slate-100 last:border-b-0 ${open ? "bg-indigo-50/30" : ""}`}>
                       <button
