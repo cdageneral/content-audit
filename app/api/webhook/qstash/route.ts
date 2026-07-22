@@ -19,6 +19,16 @@ import {
   type StoredPage,
 } from "@/lib/db/client";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
+import type { SerpBatchMessage } from "@/lib/queue/qstash";
+import {
+  serpConfigured,
+  fetchUrlKeywords,
+  fetchQuestions,
+  pickPrimaryKeyword,
+  isBrandedKeyword,
+} from "@/lib/serp/semrush";
+import { insertSnapshot, findMonthlySnapshot } from "@/lib/db/serp";
+import { dispatchSerpBatches } from "@/lib/serp/dispatch";
 import { neon } from "@neondatabase/serverless";
 import type {
   CrawlBatchMessage,
@@ -129,6 +139,8 @@ export async function POST(req: NextRequest) {
       await handleScoreBatch(msg as unknown as ScoreBatchMessage & { type: string });
     } else if (msg.type === "classify_batch") {
       await handleClassifyBatch(msg as unknown as ClassifyBatchMessage & { type: string });
+    } else if (msg.type === "serp_batch") {
+      await handleSerpBatch(msg as unknown as SerpBatchMessage & { type: string });
     } else if (msg.type === "test") {
       console.log("[qstash] Test message received — OK");
     } else {
@@ -450,7 +462,164 @@ async function handleScoreBatch(
         await refreshCompetitorCache(jobRows[0].competitor_id as string);
       } else {
         await refreshProjectCache(jobRows[0].project_id as string);
+
+        // ── SERP visibility (AIO/PAA) detection ──────────────
+        // Client jobs only for now (competitor overlap is Phase 5). Fully
+        // env-gated: without SEMRUSH_API_KEY nothing is dispatched and the
+        // audit pipeline is byte-for-byte unaffected.
+        if (serpConfigured()) {
+          try {
+            await dispatchSerpBatches(
+              jobId,
+              jobRows[0].project_id as string,
+              allPages.map((p) => p.id)
+            );
+          } catch (err) {
+            // SERP detection is additive — its dispatch failing must never
+            // fail (and re-trigger) the scoring done-path.
+            console.error(`[serp] Job ${jobId}: dispatch failed:`, err);
+          }
+        }
       }
     }
   }
+}
+
+// ── SERP visibility batch (AIO / PAA detection via Semrush) ──
+// Verified SERP facts per page URL: which ranked keywords trigger an AI
+// Overview / PAA box, and whether THIS url is cited in / owns them. Stored
+// as per-(page,job) snapshots; monthly cache avoids re-spending API units.
+
+const SERP_KEYWORDS_PER_URL = parseInt(process.env.SERP_KEYWORDS_PER_URL ?? "25", 10);
+const SERP_QUESTIONS_PER_PAGE = parseInt(process.env.SERP_QUESTIONS_PER_PAGE ?? "15", 10);
+const SERP_UNIT_CAP_PER_RUN = parseInt(process.env.SERP_UNIT_CAP_PER_RUN ?? "15000", 10);
+
+function normalizeQ(s: string): string {
+  return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+async function handleSerpBatch(
+  msg: SerpBatchMessage & { type: string }
+): Promise<void> {
+  const { jobId, pageIds, database } = msg;
+
+  if (!serpConfigured()) {
+    console.warn(`[serp] Job ${jobId}: SEMRUSH_API_KEY not set — skipping.`);
+    return;
+  }
+
+  const sql = neon(process.env.DATABASE_URL!, { fetchOptions: { cache: "no-store" } });
+  const jobRows = await sql`
+    SELECT j.project_id, p.client_name
+    FROM audit_jobs j JOIN projects p ON p.id = j.project_id
+    WHERE j.id = ${jobId}
+  `;
+  if (!jobRows[0]?.project_id) {
+    console.warn(`[serp] Job ${jobId}: no project — skipping.`);
+    return;
+  }
+  const projectId = jobRows[0].project_id as string;
+  const clientName = (jobRows[0].client_name as string) ?? "";
+
+  const allPages = await getPagesByJob(jobId);
+  const pageMap = new Map(allPages.map((p) => [p.id, p]));
+
+  // Per-run unit budget: sum what this job's snapshots already spent.
+  const spentRows = await sql`
+    SELECT COALESCE(SUM(units_spent), 0)::int AS spent FROM serp_snapshots WHERE job_id = ${jobId}
+  `.catch(() => [{ spent: 0 }] as Record<string, unknown>[]);
+  let unitsSpent = (spentRows[0]?.spent as number) ?? 0;
+
+  let done = 0;
+  let cached = 0;
+  let skipped = 0;
+
+  for (const pageId of pageIds) {
+    const page = pageMap.get(pageId);
+    if (!page) continue;
+
+    if (unitsSpent >= SERP_UNIT_CAP_PER_RUN) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      // Monthly cache: same URL+database this calendar month → copy, 0 units.
+      const prior = await findMonthlySnapshot(page.url, database);
+      if (prior) {
+        await insertSnapshot({
+          projectId,
+          jobId,
+          pageId,
+          pageUrl: page.url,
+          database,
+          primaryKeyword: prior.primaryKeyword,
+          unitsSpent: 0,
+          reusedFrom: prior.id,
+          keywords: prior.keywords,
+          questions: prior.questions,
+        });
+        cached++;
+        continue;
+      }
+
+      const { rows, unitsSpent: kwUnits } = await fetchUrlKeywords(
+        page.url,
+        database,
+        SERP_KEYWORDS_PER_URL
+      );
+      unitsSpent += kwUnits;
+
+      const primaryKeyword = pickPrimaryKeyword(rows);
+
+      let questions: { question: string; volume: number; covered: boolean }[] = [];
+      if (primaryKeyword && unitsSpent < SERP_UNIT_CAP_PER_RUN) {
+        const q = await fetchQuestions(primaryKeyword, database, SERP_QUESTIONS_PER_PAGE);
+        unitsSpent += q.unitsSpent;
+        // Covered = the URL already ranks for the question, or a heading on
+        // the page states it. Deterministic string checks — no model.
+        const rankedSet = new Set(rows.map((r) => normalizeQ(r.keyword)));
+        const headingText = (page.headings ?? [])
+          .map((h: unknown) =>
+            typeof h === "string" ? h : String((h as { text?: string })?.text ?? "")
+          )
+          .map(normalizeQ);
+        questions = q.rows.map((qr) => {
+          const nq = normalizeQ(qr.question);
+          const covered =
+            rankedSet.has(nq) || headingText.some((h) => h.length > 0 && (h.includes(nq) || nq.includes(h)));
+          return { question: qr.question, volume: qr.volume, covered };
+        });
+      }
+
+      await insertSnapshot({
+        projectId,
+        jobId,
+        pageId,
+        pageUrl: page.url,
+        database,
+        primaryKeyword,
+        unitsSpent: kwUnits,
+        keywords: rows.map((r) => ({
+          ...r,
+          branded: isBrandedKeyword(r.keyword, clientName),
+        })),
+        questions,
+      });
+      done++;
+    } catch (err) {
+      const emsg = String(err);
+      // A dead key / zero unit balance fails every page identically — stop
+      // the batch instead of burning retries page by page.
+      if (/UNITS|WRONG KEY|LIMIT EXCEEDED/i.test(emsg)) {
+        console.error(`[serp] Job ${jobId}: Semrush account error — stopping batch: ${emsg}`);
+        return;
+      }
+      console.error(`[serp] ${page.url}:`, err);
+    }
+  }
+
+  console.log(
+    `[serp] Job ${jobId}: ${done} fetched, ${cached} cached, ${skipped} over-budget (units≈${unitsSpent}).`
+  );
 }
