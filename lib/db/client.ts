@@ -64,6 +64,17 @@ export function ensureSchemaPatches(): Promise<void> {
         ALTER TABLE page_scores
         ADD COLUMN IF NOT EXISTS content_hash TEXT
       `;
+      // Search Visibility dimensions (2026-07): AIO extraction-readiness and
+      // PAA question coverage. DEFAULT 0 so pre-existing rows read as
+      // unscored-zero until their project re-runs under the new prompt.
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS score_aio_readiness SMALLINT NOT NULL DEFAULT 0
+      `;
+      await sql`
+        ALTER TABLE page_scores
+        ADD COLUMN IF NOT EXISTS score_paa_coverage SMALLINT NOT NULL DEFAULT 0
+      `;
       await sql`
         CREATE INDEX IF NOT EXISTS idx_page_scores_content_hash
         ON page_scores(content_hash)
@@ -87,7 +98,12 @@ export function ensureSchemaPatches(): Promise<void> {
           ROUND(AVG(ps.score_extractable))       AS avg_extractable,
           ROUND(AVG(ps.score_citable))           AS avg_citable,
           ROUND(AVG(ps.score_reusable))          AS avg_reusable,
-          COUNT(ps.id)                           AS pages_scored
+          COUNT(ps.id)                           AS pages_scored,
+          -- Appended AFTER existing columns: CREATE OR REPLACE VIEW can only
+          -- add columns at the end (reordering would error and break the
+          -- scoring path's ensureSchemaPatches).
+          ROUND(AVG(ps.score_aio_readiness))     AS avg_aio_readiness,
+          ROUND(AVG(ps.score_paa_coverage))      AS avg_paa_coverage
         FROM audit_jobs j
         JOIN page_scores ps ON ps.job_id = j.id
         WHERE j.status = 'done' AND j.project_id IS NOT NULL
@@ -285,6 +301,7 @@ export async function upsertScore(score: PageScore): Promise<void> {
       score_core_intent, score_edge_cases, score_implied_questions,
       score_fan_out_queries, score_retrievable, score_extractable,
       score_citable, score_reusable,
+      score_aio_readiness, score_paa_coverage,
       rationale, evidence, overall_score, grade, recommendations, model_version,
       intent_buckets, primary_bucket, bucket_evidence,
       content_hash
@@ -294,6 +311,7 @@ export async function upsertScore(score: PageScore): Promise<void> {
       ${score.scores.impliedQuestions}, ${score.scores.fanOutQueries},
       ${score.scores.retrievable}, ${score.scores.extractable},
       ${score.scores.citable}, ${score.scores.reusable},
+      ${score.scores.aioReadiness ?? 0}, ${score.scores.paaCoverage ?? 0},
       ${JSON.stringify(score.rationale)},
       ${JSON.stringify(score.evidence ?? {})},
       ${score.overallScore}, ${score.grade},
@@ -462,6 +480,8 @@ function rowToScore(r: Record<string, unknown>): PageScore {
     extractable: r.score_extractable as number,
     citable: r.score_citable as number,
     reusable: r.score_reusable as number,
+    aioReadiness: (r.score_aio_readiness as number) ?? 0,
+    paaCoverage: (r.score_paa_coverage as number) ?? 0,
   };
   return {
     id: r.id as string,

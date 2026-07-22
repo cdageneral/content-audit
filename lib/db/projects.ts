@@ -80,6 +80,9 @@ export interface ScoreHistoryPoint {
   avgExtractable: number;
   avgCitable: number;
   avgReusable: number;
+  /** 0 for runs scored before the Search Visibility dimensions shipped. */
+  avgAioReadiness?: number;
+  avgPaaCoverage?: number;
   pagesScored: number;
 }
 
@@ -420,6 +423,8 @@ function rowToHistoryPoint(r: Record<string, unknown>): ScoreHistoryPoint {
     avgExtractable: r.avg_extractable as number,
     avgCitable: r.avg_citable as number,
     avgReusable: r.avg_reusable as number,
+    avgAioReadiness: Number(r.avg_aio_readiness ?? 0),
+    avgPaaCoverage: Number(r.avg_paa_coverage ?? 0),
     pagesScored: r.pages_scored as number,
   };
 }
