@@ -13,7 +13,7 @@
 import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
-const BRAND = 'Content Audit';
+const BRAND = 'Meridian';
 
 type Mode = 'loading' | 'login' | 'bootstrap';
 
@@ -80,7 +80,15 @@ function SignInForm() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center px-6 py-12">
       <div className="w-full max-w-sm">
         <div className="flex items-center gap-2 mb-8">
-          <span className="w-3.5 h-3.5 rounded-full bg-gradient-to-br from-indigo-500 to-cyan-400" />
+          <svg viewBox="0 0 100 100" fill="none" className="w-6 h-6" aria-hidden="true">
+            <circle cx="50" cy="48" r="31" stroke="#14284a" strokeWidth={5} />
+            <polygon points="50,20 55,48 45,48" fill="#2563eb" />
+            <polygon points="45,48 55,48 50,76" fill="#14284a" />
+            <circle cx="50" cy="48" r={4.5} fill="#ffffff" />
+            <rect x="56" y="56" width="6" height="10" rx="1.5" fill="#7aa8e8" />
+            <rect x="64" y="49" width="6" height="17" rx="1.5" fill="#4f8ae0" />
+            <rect x="72" y="42" width="6" height="24" rx="1.5" fill="#2563eb" />
+          </svg>
           <span className="text-lg font-bold text-slate-900">{BRAND}</span>
         </div>
 
