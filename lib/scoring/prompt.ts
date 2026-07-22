@@ -10,11 +10,11 @@
 // versioned "recalibration") instead of silently reusing scores produced by an
 // older methodology. Leaving it unchanged guarantees unchanged content reuses
 // its stored score byte-for-byte.
-export const PROMPT_VERSION = "2026-07-18.1";
+export const PROMPT_VERSION = "2026-07-22.1";
 
 export const SCORING_SYSTEM_PROMPT = `You are an expert content analyst specializing in evaluating web content for LLM readiness — how well a piece of content will perform when processed, retrieved, cited, and used by large language models and AI-powered search systems.
 
-Your job is to score a web page across 8 dimensions. Each score is an integer from 0 to 100. Be calibrated and honest: scores above 85 should be rare and earned. Scores below 30 indicate serious deficiencies. Average well-written content should score 50–70.
+Your job is to score a web page across 10 dimensions. Each score is an integer from 0 to 100. Be calibrated and honest: scores above 85 should be rare and earned. Scores below 30 indicate serious deficiencies. Average well-written content should score 50–70.
 
 ## Scoring Dimensions
 
@@ -101,6 +101,31 @@ What this measures: Whether individual sections or chunks of this content can fu
 - 0–29: Content is completely context-dependent, unusable in isolation
 
 Penalize: heavy use of "this", "it", "they" without antecedents, "as mentioned earlier", "in the next section", content that assumes the reader has read everything before it.
+
+### Search Visibility Group
+
+**9. AIO Readiness (aioReadiness)**
+What this measures: Whether the content is structured the way Google AI Overview-cited passages are — could an answer engine lift a clean, complete answer block directly from this page?
+- 90–100: Direct 40–70-word answer immediately under an intent-matching heading, answer-first ordering (conclusion before elaboration) throughout, self-contained answer blocks, key facts stated in plain prose
+- 70–89: Most sections lead with the answer, minor burying of conclusions
+- 50–69: Answers exist but arrive after long preamble, or are split across sections
+- 30–49: Conclusions consistently buried at the end of sections, answers require assembling from multiple places
+- 0–29: No liftable answer blocks anywhere — pure narrative, promotional, or navigational content
+
+Penalize: burying the answer below background/context paragraphs, answers only in tables or images, headings that don't match the question the section answers, promotional framing where a direct answer should be.
+Note: this is distinct from Extractable (can facts be pulled out at all) and Reusable (do sections stand alone) — AIO Readiness is specifically about answer-first ordering and liftable answer-block shape for the page's primary query.
+
+**10. PAA Coverage (paaCoverage)**
+What this measures: Whether the content directly and completely answers the real question-form queries people ask about this topic — the questions that appear in Google's People Also Ask boxes.
+- 90–100: Every obvious question about the topic gets a direct, complete, quotable answer, most under question-form or clearly question-matching headings
+- 70–89: The main questions are answered directly; some secondary questions missing or answered only implicitly
+- 50–69: Several core questions answered but without direct phrasing, or notable questions absent
+- 30–49: Content touches the topic's questions only tangentially — a reader with a specific question mostly leaves unsatisfied
+- 0–29: The topic's natural questions (what is / how does / how much / is it worth) go unanswered
+
+If a "Verified search questions" list is provided in the page details, judge coverage against THAT list specifically — each listed question either gets a direct answer in the body (credit) or does not (no credit), weighted by how prominent the question is in the list. If no verified list is provided, infer the natural question set for the page's topic and judge against that.
+Penalize: question-form headings followed by non-answers, answers that require reading multiple sections, missing "how much / how long / can I" practical questions.
+Note: this is distinct from Implied Questions (anticipating a READER's follow-ups inline) — PAA Coverage measures matching the discrete, search-visible question set around the topic, each with its own liftable answer.
 
 ## Grading Scale
 - A: 85–100
@@ -219,6 +244,8 @@ export const SCORE_TOOL_DEFINITION = {
       "extractable",
       "citable",
       "reusable",
+      "aioReadiness",
+      "paaCoverage",
       "rationale",
       "evidence",
       "intentBuckets",
@@ -274,6 +301,18 @@ export const SCORE_TOOL_DEFINITION = {
         maximum: 100,
         description: "Reusable score (0–100)",
       },
+      aioReadiness: {
+        type: "integer",
+        minimum: 0,
+        maximum: 100,
+        description: "AIO Readiness score (0–100)",
+      },
+      paaCoverage: {
+        type: "integer",
+        minimum: 0,
+        maximum: 100,
+        description: "PAA Coverage score (0–100)",
+      },
       rationale: {
         type: "object",
         description: "One-sentence rationale for each dimension score",
@@ -286,6 +325,8 @@ export const SCORE_TOOL_DEFINITION = {
           "extractable",
           "citable",
           "reusable",
+          "aioReadiness",
+          "paaCoverage",
         ],
         properties: {
           coreIntent: { type: "string" },
@@ -296,6 +337,8 @@ export const SCORE_TOOL_DEFINITION = {
           extractable: { type: "string" },
           citable: { type: "string" },
           reusable: { type: "string" },
+          aioReadiness: { type: "string" },
+          paaCoverage: { type: "string" },
         },
       },
       evidence: {
@@ -311,6 +354,8 @@ export const SCORE_TOOL_DEFINITION = {
           extractable: { type: "array", items: { type: "string" }, maxItems: 2 },
           citable: { type: "array", items: { type: "string" }, maxItems: 2 },
           reusable: { type: "array", items: { type: "string" }, maxItems: 2 },
+          aioReadiness: { type: "array", items: { type: "string" }, maxItems: 2 },
+          paaCoverage: { type: "array", items: { type: "string" }, maxItems: 2 },
         },
       },
       intentBuckets: {
@@ -359,6 +404,8 @@ export const SCORE_TOOL_DEFINITION = {
                 "extractable",
                 "citable",
                 "reusable",
+                "aioReadiness",
+                "paaCoverage",
               ],
             },
             priority: {

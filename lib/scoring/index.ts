@@ -15,7 +15,7 @@ import type {
   IntentBucket,
   BucketEvidence,
 } from "@/lib/types";
-import { DEFAULT_WEIGHTS as DW, ALL_BUCKETS } from "@/lib/types";
+import { DEFAULT_WEIGHTS as DW, ALL_BUCKETS, ALL_DIMENSIONS } from "@/lib/types";
 import {
   SCORING_SYSTEM_PROMPT,
   SCORE_TOOL_DEFINITION,
@@ -53,13 +53,14 @@ export const SCORING_MODEL = process.env.SCORING_MODEL ?? "claude-haiku-4-5-2025
 // prior run, the stored score is reused verbatim — no model call, no drift.
 export function computeContentHash(
   page: CrawledPage,
-  weights: DimensionScores
+  weights: DimensionScores,
+  serpContext?: string | null
 ): string {
   const basis = JSON.stringify({
     promptVersion: PROMPT_VERSION,
     model: SCORING_MODEL,
     weights,
-    message: buildScoringMessage(page),
+    message: buildScoringMessage(page, serpContext),
   });
   return createHash("sha256").update(basis).digest("hex");
 }
@@ -70,9 +71,10 @@ export async function scorePage(
   page: CrawledPage,
   pageId: string,
   weights: DimensionScores = DW,
-  contentHash?: string
+  contentHash?: string,
+  serpContext?: string | null
 ): Promise<PageScore> {
-  const userMessage = buildScoringMessage(page);
+  const userMessage = buildScoringMessage(page, serpContext);
 
   const response = await client.messages.create({
     model: SCORING_MODEL,
@@ -110,7 +112,8 @@ export async function scoreBatch(
   pageIds: string[],
   weights: DimensionScores = DW,
   onProgress?: (pageId: string) => void,
-  contentHashes?: (string | undefined)[]
+  contentHashes?: (string | undefined)[],
+  serpContexts?: (string | null | undefined)[]
 ): Promise<PageScore[]> {
   const results: PageScore[] = [];
 
@@ -135,7 +138,7 @@ export async function scoreBatch(
     // freeze the batch (the original bug: no timeout → permanent stall).
     const attempt = () =>
       withTimeout(
-        scorePage(pages[i], pageIds[i], weights, contentHashes?.[i]),
+        scorePage(pages[i], pageIds[i], weights, contentHashes?.[i], serpContexts?.[i]),
         PAGE_SCORE_TIMEOUT_MS,
         pages[i].url
       );
@@ -176,7 +179,7 @@ export async function scoreBatch(
 
 // ── Message builder ───────────────────────────────────────────
 
-function buildScoringMessage(page: CrawledPage): string {
+function buildScoringMessage(page: CrawledPage, serpContext?: string | null): string {
   const headingOutline = page.headings
     .map((h) => `${"  ".repeat(h.level - 1)}- [H${h.level}] ${h.text}`)
     .join("\n");
@@ -215,7 +218,7 @@ ${headingOutline || "(no headings found)"}
 
 ## Page Content
 ${bodyExcerpt}${truncated ? "\n\n[Content truncated at 12,000 characters]" : ""}
-
+${serpContext ? `\n${serpContext}\n` : ""}
 ---
 Please analyze this content and call the record_content_scores tool with your assessment.`;
 }
@@ -239,6 +242,8 @@ function buildPageScore(
     extractable: clamp(raw.extractable as number),
     citable: clamp(raw.citable as number),
     reusable: clamp(raw.reusable as number),
+    aioReadiness: clamp(raw.aioReadiness as number),
+    paaCoverage: clamp(raw.paaCoverage as number),
   };
 
   // Defensive defaults: a truncated tool_use response (max_tokens hit) can
@@ -481,6 +486,8 @@ function zeroScore(page: CrawledPage, pageId: string): PageScore {
     extractable: 0,
     citable: 0,
     reusable: 0,
+    aioReadiness: 0,
+    paaCoverage: 0,
   };
   const zeroRationale: DimensionRationale = {
     coreIntent: "Scoring failed",
@@ -491,6 +498,8 @@ function zeroScore(page: CrawledPage, pageId: string): PageScore {
     extractable: "Scoring failed",
     citable: "Scoring failed",
     reusable: "Scoring failed",
+    aioReadiness: "Scoring failed",
+    paaCoverage: "Scoring failed",
   };
   return {
     id: crypto.randomUUID(),
@@ -530,16 +539,7 @@ export function computeAuditSummary(allScores: PageScore[]) {
     return null;
   }
 
-  const dims: ScoreDimension[] = [
-    "coreIntent",
-    "edgeCases",
-    "impliedQuestions",
-    "fanOutQueries",
-    "retrievable",
-    "extractable",
-    "citable",
-    "reusable",
-  ];
+  const dims: ScoreDimension[] = ALL_DIMENSIONS;
 
   const averageByDimension = {} as DimensionScores;
   for (const dim of dims) {
