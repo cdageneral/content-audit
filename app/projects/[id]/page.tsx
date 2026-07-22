@@ -225,6 +225,8 @@ export default async function ProjectHubPage({
           extractable: Math.round(Number(prev.avgExtractable)),
           citable: Math.round(Number(prev.avgCitable)),
           reusable: Math.round(Number(prev.avgReusable)),
+          aioReadiness: Math.round(Number(prev.avgAioReadiness ?? 0)),
+          paaCoverage: Math.round(Number(prev.avgPaaCoverage ?? 0)),
         },
       };
     }
@@ -511,7 +513,7 @@ function medianGrade(
 
 function computeQuickSummary(scores: Awaited<ReturnType<typeof getScoresByJob>>) {
   if (!scores.length) return null as any;
-  const dims = ["coreIntent","edgeCases","impliedQuestions","fanOutQueries","retrievable","extractable","citable","reusable"] as const;
+  const dims = ["coreIntent","edgeCases","impliedQuestions","fanOutQueries","retrievable","extractable","citable","reusable","aioReadiness","paaCoverage"] as const;
   const avg = (d: typeof dims[number]) => Math.round(scores.reduce((s,p) => s + p.scores[d], 0) / scores.length);
   const avgByDim = Object.fromEntries(dims.map(d => [d, avg(d)])) as any;
   const avgScore = Math.round(scores.reduce((s,p) => s + p.overallScore, 0) / scores.length);
