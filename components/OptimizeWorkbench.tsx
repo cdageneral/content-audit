@@ -96,6 +96,7 @@ const RESEARCH_DIMS: Partial<
   impliedQuestions: { button: "🔎 Fetch Real Questions", header: "Questions people actually ask" },
   fanOutQueries: { button: "🔎 Fetch Related Topics", header: "Adjacent topics worth covering" },
   citable: { button: "🔎 Fetch Authoritative Sources", header: "Authoritative sources worth citing" },
+  paaCoverage: { button: "🔎 Fetch PAA Questions", header: "People-Also-Ask questions to answer" },
 };
 
 interface ResearchSuggestion {
@@ -842,7 +843,11 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                   const simScore = activeSim ? activeSim.scores[dim] : null;
                   const open = expanded === dim;
                   const recs = baseline.recommendations.filter((r) => r.dimension === dim);
-                  const group = DIMENSION_GROUPS.contentQuality.indexOf(dim) !== -1 ? "Content Quality" : "AI Accessibility";
+                  const group = DIMENSION_GROUPS.contentQuality.indexOf(dim) !== -1
+                    ? "Content Quality"
+                    : DIMENSION_GROUPS.searchVisibility.indexOf(dim) !== -1
+                    ? "Search Visibility"
+                    : "The 4 Ables";
                   return (
                     <div key={dim} className={`border-b border-slate-100 last:border-b-0 ${open ? "bg-indigo-50/30" : ""}`}>
                       <button

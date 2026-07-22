@@ -25,6 +25,7 @@ interface Props {
 const DIMS: ScoreDimension[] = [
   "coreIntent","edgeCases","impliedQuestions","fanOutQueries",
   "retrievable","extractable","citable","reusable",
+  "aioReadiness","paaCoverage",
 ];
 
 const DIM_GROUP: Record<ScoreDimension, string> = {
@@ -32,10 +33,12 @@ const DIM_GROUP: Record<ScoreDimension, string> = {
   edgeCases: "Content quality",
   impliedQuestions: "Content quality",
   fanOutQueries: "Content quality",
-  retrievable: "AI Accessibility",
-  extractable: "AI Accessibility",
-  citable: "AI Accessibility",
-  reusable: "AI Accessibility",
+  retrievable: "The 4 Ables",
+  extractable: "The 4 Ables",
+  citable: "The 4 Ables",
+  reusable: "The 4 Ables",
+  aioReadiness: "Search Visibility",
+  paaCoverage: "Search Visibility",
 };
 
 function avg(scores: PageScore[], dim: ScoreDimension | "overall"): number | null {
