@@ -28,6 +28,7 @@ import {
   isBrandedKeyword,
 } from "@/lib/serp/semrush";
 import { insertSnapshot, findMonthlySnapshot } from "@/lib/db/serp";
+import { getSerpScoringContext } from "@/lib/serp/context";
 import { dispatchSerpBatches } from "@/lib/serp/dispatch";
 import { neon } from "@neondatabase/serverless";
 import type {
@@ -393,12 +394,17 @@ async function handleScoreBatch(
   // scored the identical input, copy that score verbatim (same numbers, same
   // rationale, same recommendations) — unchanged content can NEVER drift, and
   // it costs zero model calls. Only genuinely new/changed content is scored.
-  const needsScoring: { page: CrawledPage; id: string; hash: string }[] = [];
+  const needsScoring: { page: CrawledPage; id: string; hash: string; serpContext: string | null }[] = [];
   let reused = 0;
 
   for (const p of pagesToScore) {
     const page = toCrawledPage(p);
-    const hash = computeContentHash(page, weights as DimensionScores);
+    // Verified SERP context (latest stored snapshot for this URL, if any) is
+    // part of the scoring input — and therefore of the content hash, so a
+    // changed question set forces a versioned re-score instead of a silent
+    // reuse against stale questions.
+    const serpContext = await getSerpScoringContext(p.url);
+    const hash = computeContentHash(page, weights as DimensionScores, serpContext);
     try {
       const prior = await findReusableScore(p.url, hash);
       if (prior) {
@@ -420,7 +426,7 @@ async function handleScoreBatch(
       // fall through and score fresh rather than failing the batch.
       console.error(`[score] reuse lookup failed for ${p.url}:`, err);
     }
-    needsScoring.push({ page, id: p.id, hash });
+    needsScoring.push({ page, id: p.id, hash, serpContext });
   }
 
   if (reused > 0) {
@@ -434,7 +440,8 @@ async function handleScoreBatch(
     async (_pageId) => {
       await incrementJobProgress(jobId, "scored_pages");
     },
-    needsScoring.map((c) => c.hash)
+    needsScoring.map((c) => c.hash),
+    needsScoring.map((c) => c.serpContext)
   );
 
   for (const score of pageScoreList) {
