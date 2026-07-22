@@ -135,6 +135,8 @@ async function loadBaseline(pageId: string): Promise<WorkbenchBaseline | null> {
     extractable: r.score_extractable as number,
     citable: r.score_citable as number,
     reusable: r.score_reusable as number,
+    aioReadiness: (r.score_aio_readiness as number) ?? 0,
+    paaCoverage: (r.score_paa_coverage as number) ?? 0,
   };
   return {
     scores,
