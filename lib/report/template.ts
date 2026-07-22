@@ -52,6 +52,8 @@ export const DIM_ORDER: ScoreDimension[] = [
   "extractable",
   "citable",
   "reusable",
+  "aioReadiness",
+  "paaCoverage",
 ];
 
 const DIM_LABEL: Record<ScoreDimension, string> = {
@@ -63,6 +65,8 @@ const DIM_LABEL: Record<ScoreDimension, string> = {
   extractable: "Extractable",
   citable: "Citable",
   reusable: "Reusable",
+  aioReadiness: "AIO Readiness",
+  paaCoverage: "PAA Coverage",
 };
 
 const DIM_SHORT: Record<ScoreDimension, string> = {
@@ -74,6 +78,8 @@ const DIM_SHORT: Record<ScoreDimension, string> = {
   extractable: "Extractable",
   citable: "Citable",
   reusable: "Reusable",
+  aioReadiness: "AIO Ready",
+  paaCoverage: "PAA Cover",
 };
 
 const DIM_GROUP: Record<ScoreDimension, "quality" | "machine"> = {
@@ -85,6 +91,8 @@ const DIM_GROUP: Record<ScoreDimension, "quality" | "machine"> = {
   extractable: "machine",
   citable: "machine",
   reusable: "machine",
+  aioReadiness: "machine",
+  paaCoverage: "quality",
 };
 
 const BUCKETS: IntentBucket[] = ["recency", "ranking", "local", "comparison"];
@@ -302,6 +310,16 @@ const ISSUE_COPY: Record<ScoreDimension, { title: string; body: string; fix: str
     title: "Sections that can't stand alone",
     body: "Cross-references and context-dependent pronouns mean strong passages fail when quoted in isolation — which is exactly how answer engines quote.",
     fix: "Open each H2 section with a self-contained topic sentence.",
+  },
+  aioReadiness: {
+    title: "Answers buried below the fold",
+    body: "Sections build context first and conclude last, so there is no clean 40\u201370-word answer block an AI Overview can lift and cite.",
+    fix: "Lead every section with the direct answer under an intent-matching heading; elaborate after.",
+  },
+  paaCoverage: {
+    title: "Real search questions left unanswered",
+    body: "The question-form queries people actually search \u2014 the ones Google shows as People Also Ask \u2014 aren't each given a direct, quotable answer.",
+    fix: "Add question-form headings for the verified question set, each followed by a complete direct answer.",
   },
 };
 
@@ -847,6 +865,10 @@ const EDU_BODY: Record<ScoreDimension, string> = {
     "Named author, visible date, external sources. Engines attribute answers to sources they can defend choosing.",
   reusable:
     "Self-contained sections with no “see above” dependencies — because the engine quotes the chunk, never the page.",
+  aioReadiness:
+    "Answer first, elaborate second. AI Overviews lift clean 40\u201370-word answer blocks \u2014 pages that bury the conclusion never get quoted.",
+  paaCoverage:
+    "Google shows the questions people ask. Pages that answer each one directly \u2014 under a matching heading \u2014 win the People Also Ask placements.",
 };
 
 // ── Stylesheet (print-ready; Letter @ 96dpi = 816×1056) ───────
