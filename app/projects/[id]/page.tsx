@@ -17,8 +17,9 @@ import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
 import EditAuditSourceButton from "@/components/EditAuditSourceButton";
 import SearchVisibilityCard from "@/components/SearchVisibilityCard";
-import { getSerpRollup, getLatestSerpJobId } from "@/lib/db/serp";
+import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
 import { serpConfigured } from "@/lib/serp/semrush";
+import { dfsConfigured } from "@/lib/serp/dataforseo";
 
 export const revalidate = 0;
 
@@ -198,11 +199,13 @@ export default async function ProjectHubPage({
   // ── Search visibility (AIO/PAA) — latest client run with SERP data ──
   // Lazy tables: a DB that has never run SERP detection just yields null.
   // Stored data still renders even if the key was later removed.
-  const serpEnabled = serpConfigured();
+  const serpEnabled = serpConfigured() || dfsConfigured();
   let serpRollup = null as Awaited<ReturnType<typeof getSerpRollup>>;
+  let serpSummaries: Awaited<ReturnType<typeof getSerpPageSummaries>> | undefined;
   const serpJobId = await getLatestSerpJobId(params.id).catch(() => null);
   if (serpJobId) {
     serpRollup = await getSerpRollup(serpJobId).catch(() => null);
+    serpSummaries = await getSerpPageSummaries(serpJobId).catch(() => undefined);
   }
 
   // ── Previous-run averages per site (for the matrix ▲/▼ tickers) ──
@@ -471,6 +474,7 @@ export default async function ProjectHubPage({
         <div className="anim-fade-up stagger-3">
           <p className="section-label">{project.clientName} — page-level results</p>
           <AuditResults
+            serpSummaries={serpSummaries}
             job={{ id: clientJobId } as any}
             scores={clientScores}
             summary={computeQuickSummary(clientScores)}
