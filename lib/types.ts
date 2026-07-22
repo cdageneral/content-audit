@@ -105,9 +105,12 @@ export interface PageMetadata {
 // ── Scores ───────────────────────────────────────────────────
 
 /**
- * The 8 scoring dimensions:
- *  Content quality: coreIntent, edgeCases, impliedQuestions, fanOutQueries
- *  LLM Ables:       retrievable, extractable, citable, reusable
+ * The 10 scoring dimensions:
+ *  Content quality:   coreIntent, edgeCases, impliedQuestions, fanOutQueries
+ *  AI Accessibility:  retrievable, extractable, citable, reusable
+ *  Search visibility: aioReadiness, paaCoverage (added 2026-07 — Google AI
+ *                     Overview extraction-readiness + People-Also-Ask
+ *                     question coverage)
  */
 export type ScoreDimension =
   | "coreIntent"
@@ -117,7 +120,9 @@ export type ScoreDimension =
   | "retrievable"
   | "extractable"
   | "citable"
-  | "reusable";
+  | "reusable"
+  | "aioReadiness"
+  | "paaCoverage";
 
 export const ALL_DIMENSIONS: ScoreDimension[] = [
   "coreIntent",
@@ -128,6 +133,8 @@ export const ALL_DIMENSIONS: ScoreDimension[] = [
   "extractable",
   "citable",
   "reusable",
+  "aioReadiness",
+  "paaCoverage",
 ];
 
 export const DIMENSION_LABELS: Record<ScoreDimension, string> = {
@@ -139,11 +146,14 @@ export const DIMENSION_LABELS: Record<ScoreDimension, string> = {
   extractable: "Extractable",
   citable: "Citable",
   reusable: "Reusable",
+  aioReadiness: "AIO Readiness",
+  paaCoverage: "PAA Coverage",
 };
 
 export const DIMENSION_GROUPS = {
   contentQuality: ["coreIntent", "edgeCases", "impliedQuestions", "fanOutQueries"] as ScoreDimension[],
   theAblesGroup: ["retrievable", "extractable", "citable", "reusable"] as ScoreDimension[],
+  searchVisibility: ["aioReadiness", "paaCoverage"] as ScoreDimension[],
 };
 
 export type DimensionScores = Record<ScoreDimension, number>;
@@ -211,15 +221,21 @@ export function isAiFetchLikely(
   return readiness >= AI_FETCH_READINESS_BAR;
 }
 
+// Reweighted 2026-07 when aioReadiness/paaCoverage were added (sums to 1.0).
+// Old 8-dim weight sets stored on existing jobs still work: the overall is
+// computed over whatever weights the job carries, and merging with these
+// defaults fills the two new dims for pre-existing projects.
 export const DEFAULT_WEIGHTS: DimensionScores = {
-  coreIntent: 0.15,
-  edgeCases: 0.10,
-  impliedQuestions: 0.15,
-  fanOutQueries: 0.10,
-  retrievable: 0.15,
-  extractable: 0.15,
-  citable: 0.10,
-  reusable: 0.10,
+  coreIntent: 0.13,
+  edgeCases: 0.09,
+  impliedQuestions: 0.12,
+  fanOutQueries: 0.09,
+  retrievable: 0.13,
+  extractable: 0.13,
+  citable: 0.09,
+  reusable: 0.09,
+  aioReadiness: 0.07,
+  paaCoverage: 0.06,
 };
 
 export interface PageScore {
