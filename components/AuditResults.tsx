@@ -44,6 +44,9 @@ export interface CompetitorPageEntry {
   grade: "A" | "B" | "C" | "D" | "F";
 }
 
+// Type-only import — erased at compile time, no server code in the bundle.
+import type { SerpPageSummary } from "@/lib/db/serp";
+
 interface Props {
   job: AuditJob;
   scores: PageScore[];
@@ -68,9 +71,14 @@ interface Props {
    * drives the row badges. Absent on views with no optimize context.
    */
   optimizeStates?: Record<string, PageOptimizeState>;
+  /**
+   * Per-URL verified SERP visibility (AIO/PAA status, who is cited), keyed by
+   * full page URL. Absent until a SERP provider is configured and fetched.
+   */
+  serpSummaries?: Record<string, SerpPageSummary>;
 }
 
-export default function AuditResults({ job, scores, summary, competitorPages = [], projectId, auditSource, sourceUrls, optimizeStates }: Props) {
+export default function AuditResults({ job, scores, summary, competitorPages = [], projectId, auditSource, sourceUrls, optimizeStates, serpSummaries }: Props) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<"overallScore" | ScoreDimension>("overallScore");
@@ -524,6 +532,14 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                 <SortHeader label="Extract" field="extractable" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Cite" field="citable" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
                 <SortHeader label="Reuse" field="reusable" current={sortKey} dir={sortDir} onSort={(f) => toggleSort(f, sortKey, sortDir, setSortKey, setSortDir)} />
+                {serpSummaries && (
+                  <th
+                    className="text-left px-2 py-3"
+                    title="Verified Google SERP status: AI Overview citations and People-Also-Ask answers won, out of this page's ranked keywords that trigger them"
+                  >
+                    AI SERP
+                  </th>
+                )}
                 <th className="px-4 py-3">Grade</th>
                 {projectId && <th className="px-4 py-3" />}
               </tr>
@@ -613,6 +629,11 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                       <ScoreChip score={page.scores[d]} />
                     </td>
                   ))}
+                  {serpSummaries && (
+                    <td className="px-2 py-3">
+                      <SerpChips summary={serpSummaries[page.url]} />
+                    </td>
+                  )}
                   <td className="px-4 py-3">
                     <span className={`grade-${page.grade} rounded px-2 py-0.5 text-xs font-bold`}>
                       {page.grade}
@@ -668,6 +689,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
             projectId ? `/projects/${projectId}/optimize/${selectedPage.pageId}` : undefined
           }
           optState={projectId ? optimizeStates?.[selectedPage.url] : undefined}
+          serp={serpSummaries?.[selectedPage.url]}
         />
       )}
     </div>
@@ -966,16 +988,136 @@ function ClassifyButton({
   );
 }
 
+// ── Verified SERP chips (AI Overview / PAA status per URL) ────
+
+function SerpChips({ summary }: { summary?: SerpPageSummary }) {
+  if (!summary) {
+    return <span className="text-slate-300 text-xs">—</span>;
+  }
+  const misses = summary.keywords.filter((k) => k.aioTriggered && !k.aioCited && !k.branded);
+  const topMiss = misses[0];
+  const aioTone =
+    summary.aioCited > 0
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : summary.aioTriggered > 0
+      ? "bg-red-50 text-red-600 border-red-200"
+      : "bg-slate-50 text-slate-400 border-slate-200";
+  const paaTone =
+    summary.paaOwned > 0
+      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+      : summary.paaPresent > 0
+      ? "bg-amber-50 text-amber-700 border-amber-200"
+      : "bg-slate-50 text-slate-400 border-slate-200";
+  const aioTitle =
+    summary.aioTriggered === 0
+      ? "None of this page's ranked keywords trigger an AI Overview"
+      : topMiss
+      ? `Cited in ${summary.aioCited} of ${summary.aioTriggered} AI Overviews. Biggest miss: "${topMiss.keyword}"${
+          topMiss.aioWinners.length ? ` — cited instead: ${topMiss.aioWinners.join(", ")}` : ""
+        }${topMiss.siblingCited ? " (another page of this site IS cited)" : ""}`
+      : `Cited in ${summary.aioCited} of ${summary.aioTriggered} AI Overviews`;
+  return (
+    <div className="flex flex-col gap-1 whitespace-nowrap">
+      <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${aioTone}`} title={aioTitle}>
+        AIO {summary.aioCited}/{summary.aioTriggered}
+      </span>
+      <span
+        className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${paaTone}`}
+        title={`Owns the People-Also-Ask answer for ${summary.paaOwned} of ${summary.paaPresent} keywords showing a PAA box`}
+      >
+        PAA {summary.paaOwned}/{summary.paaPresent}
+      </span>
+    </div>
+  );
+}
+
+function SerpDetailSection({ serp }: { serp: SerpPageSummary }) {
+  const rows = serp.keywords.filter((k) => !k.branded).slice(0, 10);
+  if (rows.length === 0 && serp.questions.length === 0) return null;
+  return (
+    <div>
+      <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">
+        Search visibility — verified SERP data
+      </p>
+      {serp.primaryKeyword && (
+        <p className="text-xs text-slate-500 mb-2">
+          Primary query: <span className="font-semibold text-slate-700">{serp.primaryKeyword}</span>
+        </p>
+      )}
+      {rows.length > 0 && (
+        <table className="w-full text-xs mb-3">
+          <thead>
+            <tr className="text-left text-slate-400">
+              <th className="py-1 pr-2 font-medium">Keyword</th>
+              <th className="py-1 pr-2 font-medium">Vol/mo</th>
+              <th className="py-1 pr-2 font-medium">Rank</th>
+              <th className="py-1 font-medium">AI Overview</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((k) => (
+              <tr key={k.keyword} className="border-t border-slate-100 align-top">
+                <td className="py-1.5 pr-2 text-slate-700">{k.keyword}</td>
+                <td className="py-1.5 pr-2 tabular-nums text-slate-500">
+                  {k.volume ? k.volume.toLocaleString() : "—"}
+                </td>
+                <td className="py-1.5 pr-2 tabular-nums text-slate-500">
+                  {k.position ? `#${k.position}` : "—"}
+                </td>
+                <td className="py-1.5">
+                  {!k.aioTriggered ? (
+                    <span className="text-slate-400">not triggered</span>
+                  ) : k.aioCited ? (
+                    <span className="text-emerald-600 font-semibold">✓ cited</span>
+                  ) : k.siblingCited ? (
+                    <span className="text-amber-600" title="A different page of this site is cited">
+                      sibling page cited
+                    </span>
+                  ) : (
+                    <span className="text-red-500" title={k.aioWinners.join(", ")}>
+                      not cited{k.aioWinners.length ? ` — ${k.aioWinners.slice(0, 2).join(", ")}` : ""}
+                    </span>
+                  )}
+                  {k.paaPresent && (
+                    <span className={`ml-2 ${k.paaOwned ? "text-emerald-600" : "text-slate-400"}`}>
+                      {k.paaOwned ? "PAA ✓" : "PAA —"}
+                    </span>
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {serp.questions.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-[11px] text-slate-400">People Also Ask (verbatim, live SERP):</p>
+          {serp.questions.slice(0, 8).map((q) => (
+            <p key={q.question} className="text-xs text-slate-600">
+              {q.covered ? "✓" : "✗"} {q.question}
+              {!q.covered && q.sourceDomain && (
+                <span className="text-slate-400"> — answered by {q.sourceDomain}</span>
+              )}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PageDetail({
   page,
   onClose,
   optimizeHref,
   optState,
+  serp,
 }: {
   page: PageScore;
   onClose: () => void;
   optimizeHref?: string;
   optState?: PageOptimizeState;
+  serp?: SerpPageSummary;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-end md:items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -1005,6 +1147,8 @@ function PageDetail({
             ×
           </button>
         </div>
+
+        {serp && <SerpDetailSection serp={serp} />}
 
         {optState && (
           <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2 text-xs text-slate-600 flex items-center gap-2 flex-wrap">

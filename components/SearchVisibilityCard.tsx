@@ -77,8 +77,8 @@ export default function SearchVisibilityCard({
         <div className="min-w-[240px]">
           <h2 className="text-base font-semibold">Search Visibility — AI Overviews &amp; People Also Ask</h2>
           <p className="text-sm opacity-70 mt-1">
-            Verified Google SERP data (Semrush): where your pages are cited in AI Overviews and
-            own People&nbsp;Also&nbsp;Ask answers.
+            Verified Google SERP data: where your pages are cited in AI Overviews and own
+            People&nbsp;Also&nbsp;Ask answers — and who wins the ones you don&apos;t.
           </p>
         </div>
         <button
@@ -179,9 +179,9 @@ export default function SearchVisibilityCard({
           )}
 
           <p className="text-xs opacity-50 mt-3">
-            Verified as of {new Date(rollup.fetchedAt).toLocaleDateString()} · Semrush Google{" "}
-            {rollup.database.toUpperCase()} data (refreshes ~monthly) · questions are
-            question-form search queries, not literal PAA box text
+            Verified as of {new Date(rollup.fetchedAt).toLocaleDateString()} · Google{" "}
+            {rollup.database.toUpperCase()} SERP data · per-URL detail in the All Pages
+            table (AI SERP column — click a row)
           </p>
         </>
       )}
