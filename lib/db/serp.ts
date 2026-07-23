@@ -206,11 +206,16 @@ export async function findMonthlySnapshot(
 ): Promise<CachedSnapshot | null> {
   await ensureSerpSchema();
   const sql = db();
+  // Only reuse snapshots that actually carry keyword rows: an empty snapshot
+  // is either a fetch bug (e.g. the pre-variant-retry URL-mismatch era) or a
+  // page that ranks for nothing — both are worth re-checking rather than
+  // pinning a zero for the rest of the month (an empty Labs call is cheap).
   const snaps = await sql`
-    SELECT id, primary_keyword FROM serp_snapshots
-    WHERE page_url = ${pageUrl} AND database = ${database}
-      AND date_trunc('month', fetched_at) = date_trunc('month', NOW())
-    ORDER BY fetched_at DESC LIMIT 1
+    SELECT s.id, s.primary_keyword FROM serp_snapshots s
+    WHERE s.page_url = ${pageUrl} AND s.database = ${database}
+      AND date_trunc('month', s.fetched_at) = date_trunc('month', NOW())
+      AND EXISTS (SELECT 1 FROM serp_keywords k WHERE k.snapshot_id = s.id)
+    ORDER BY s.fetched_at DESC LIMIT 1
   `;
   if (snaps.length === 0) return null;
   const id = snaps[0].id as string;
