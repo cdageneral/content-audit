@@ -36,6 +36,7 @@ import {
 } from "@/lib/serp/dataforseo";
 import { getSerpScoringContext } from "@/lib/serp/context";
 import { dispatchSerpBatches } from "@/lib/serp/dispatch";
+import { recordApiCall } from "@/lib/usage/record";
 import { neon } from "@neondatabase/serverless";
 import type {
   CrawlBatchMessage,
@@ -337,7 +338,7 @@ async function handleClassifyBatch(
     return;
   }
 
-  const results = await classifyBatch(pagesToClassify);
+  const results = await classifyBatch(pagesToClassify, jobId);
 
   for (const [pageId, c] of Array.from(results.entries())) {
     await updatePageClassification(pageId, {
@@ -592,11 +593,31 @@ async function handleSerpBatch(
         const res = await fetchUrlKeywordsDfs(page.url, database, SERP_KEYWORDS_PER_URL);
         rows = res.rows;
         costUsd += res.costUsd;
+        // Ledger: DataForSEO returns its EXACT charged cost on every response.
+        await recordApiCall({
+          provider: "dataforseo",
+          purpose: "serp_keywords",
+          costUsd: res.costUsd,
+          projectId,
+          jobId,
+          pageUrl: page.url,
+          meta: { database, rows: res.rows.length },
+        });
       } else {
         const res = await fetchUrlKeywords(page.url, database, SERP_KEYWORDS_PER_URL);
         rows = res.rows;
         kwUnits = res.unitsSpent;
         unitsSpent += kwUnits;
+        // Semrush bills in plan-dependent API units — record units, no $ guess.
+        await recordApiCall({
+          provider: "semrush",
+          purpose: "serp_keywords",
+          costUsd: null,
+          projectId,
+          jobId,
+          pageUrl: page.url,
+          meta: { database, rows: res.rows.length, units_spent: res.unitsSpent },
+        });
       }
 
       const primaryKeyword = pickPrimaryKeyword(rows);
@@ -630,6 +651,15 @@ async function handleSerpBatch(
           if (costUsd >= SERP_COST_CAP_USD) break;
           const live = await fetchSerpLiveDfs(kw, database);
           costUsd += live.costUsd;
+          await recordApiCall({
+            provider: "dataforseo",
+            purpose: "serp_live",
+            costUsd: live.costUsd,
+            projectId,
+            jobId,
+            pageUrl: page.url,
+            meta: { database, keyword: kw },
+          });
           const row = rows.find((r) => r.keyword === kw);
 
           // AI Overview citations → occupants + refined cited flag.
@@ -684,6 +714,15 @@ async function handleSerpBatch(
         // Semrush fallback: question-form queries as PAA proxy (no occupants).
         const q = await fetchQuestions(primaryKeyword, database, SERP_QUESTIONS_PER_PAGE);
         unitsSpent += q.unitsSpent;
+        await recordApiCall({
+          provider: "semrush",
+          purpose: "serp_questions",
+          costUsd: null,
+          projectId,
+          jobId,
+          pageUrl: page.url,
+          meta: { database, keyword: primaryKeyword, units_spent: q.unitsSpent },
+        });
         const rankedSet = new Set(rows.map((r) => normalizeQ(r.keyword)));
         questions = q.rows.map((qr) => {
           const nq = normalizeQ(qr.question);
