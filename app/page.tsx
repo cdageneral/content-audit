@@ -44,12 +44,12 @@ export default async function DashboardPage() {
       {/* Hero */}
       <div className="px-6 pt-16 pb-10 max-w-6xl mx-auto">
         <div className="anim-fade-up text-center mb-12">
-          <h1 className="text-5xl font-bold mb-4" style={{ color: "var(--text-1)", letterSpacing: "-0.02em" }}>
-            LLM Content<br />
-            <span style={{ background: "linear-gradient(135deg, #6366f1, #7c3aed)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>
-              Readiness Auditor
-            </span>
-          </h1>
+          <img
+            src="/meridian-logo-hero.png"
+            alt="Meridian"
+            className="mx-auto mb-6"
+            style={{ height: "180px", width: "auto", maxWidth: "90%" }}
+          />
           <p className="text-lg max-w-xl mx-auto" style={{ color: "var(--text-2)" }}>
             Track how well your content — and your competitors' — performs when retrieved, cited, and reused by AI systems.
           </p>
