@@ -23,6 +23,7 @@ import {
   CLASSIFY_TOOL_DEFINITION,
   PROMPT_VERSION,
 } from "./prompt";
+import { recordAnthropicCall } from "@/lib/usage/record";
 
 // Bounded client: a per-request network timeout + capped retries so a single
 // slow/hung Anthropic call can never block a whole scoring batch indefinitely.
@@ -72,7 +73,11 @@ export async function scorePage(
   pageId: string,
   weights: DimensionScores = DW,
   contentHash?: string,
-  serpContext?: string | null
+  serpContext?: string | null,
+  // Usage-ledger label: the audit pipeline scores with 'score'; the Optimize
+  // workbench passes 'simulate'/'verify' so the admin panel can tell real
+  // audit spend from workbench experimentation.
+  usagePurpose: "score" | "simulate" | "verify" = "score"
 ): Promise<PageScore> {
   const userMessage = buildScoringMessage(page, serpContext);
 
@@ -93,6 +98,17 @@ export async function scorePage(
     tools: [SCORE_TOOL_DEFINITION],
     tool_choice: { type: "any" },
     messages: [{ role: "user", content: userMessage }],
+  });
+
+  // Usage ledger: exact reported token counts × published rates. Awaited so
+  // the serverless function can't be frozen mid-write, but recordAnthropicCall
+  // never throws — a ledger hiccup can't fail a score.
+  await recordAnthropicCall({
+    purpose: usagePurpose,
+    model: SCORING_MODEL,
+    usage: response.usage,
+    jobId: page.jobId || null,
+    pageUrl: page.url,
   });
 
   // Extract tool_use result
@@ -331,11 +347,14 @@ function sanitizeClassification(raw: Record<string, unknown>): PageClassificatio
  * page without re-running the full 8-dimension score (cheaper + leaves the
  * existing scores untouched).
  */
-export async function classifyPage(page: {
-  url: string;
-  title?: string;
-  bodyText: string;
-}): Promise<PageClassification> {
+export async function classifyPage(
+  page: {
+    url: string;
+    title?: string;
+    bodyText: string;
+  },
+  jobId?: string | null
+): Promise<PageClassification> {
   const bodyExcerpt = page.bodyText.slice(0, 12_000);
   const userMessage = `Classify the following web page into intent buckets.
 
@@ -357,6 +376,14 @@ Call the record_intent_buckets tool with your classification.`;
     messages: [{ role: "user", content: userMessage }],
   });
 
+  await recordAnthropicCall({
+    purpose: "classify",
+    model: SCORING_MODEL,
+    usage: response.usage,
+    jobId: jobId ?? null,
+    pageUrl: page.url,
+  });
+
   const toolUse = response.content.find((b) => b.type === "tool_use");
   if (!toolUse || toolUse.type !== "tool_use") {
     throw new Error(`Classification failed for ${page.url}: no tool_use in response`);
@@ -373,7 +400,8 @@ const PAGE_CLASSIFY_TIMEOUT_MS = 30_000;
  * so a later backfill run can retry them) rather than a fake empty result.
  */
 export async function classifyBatch(
-  pages: { id: string; url: string; title?: string; bodyText: string }[]
+  pages: { id: string; url: string; title?: string; bodyText: string }[],
+  jobId?: string | null
 ): Promise<Map<string, PageClassification>> {
   const results = new Map<string, PageClassification>();
   const batchStart = Date.now();
@@ -387,7 +415,7 @@ export async function classifyBatch(
     }
     try {
       const c = await withTimeout(
-        classifyPage(pages[i]),
+        classifyPage(pages[i], jobId),
         PAGE_CLASSIFY_TIMEOUT_MS,
         pages[i].url
       );
