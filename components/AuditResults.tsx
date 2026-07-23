@@ -257,7 +257,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
             Score by Dimension
             <InfoTip
               title="Score by Dimension"
-              text="Your site's average score on each of the 8 LLM-readiness dimensions. The fuller the shape, the stronger the site — dents show where AI systems struggle with your content."
+              text="Your site's average score on each of the 10 LLM-readiness dimensions. The fuller the shape, the stronger the site — dents show where AI systems struggle with your content."
             />
           </h3>
           <ResponsiveContainer width="100%" height={260}>
@@ -288,7 +288,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
             Top Issues to Fix
             <InfoTip
               title="Top Issues to Fix"
-              text="Your four lowest-scoring dimensions, with how many pages fall below 50 on each. Fixing these sitewide moves the average score fastest."
+              text="All 10 dimensions ranked weakest to strongest, with how many pages fall below 50 on each. Fixing the top of this list sitewide moves the average score fastest."
             />
           </h3>
           {summary.topIssues.map((issue) => (
