@@ -17,6 +17,7 @@ import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
+import { recordAnthropicCall } from "@/lib/usage/record";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -109,6 +110,15 @@ export async function POST(req: NextRequest, { params }: Params) {
         throw err;
       }
     }
+
+    await recordAnthropicCall({
+      purpose: "rewrite",
+      model: REWRITE_MODEL,
+      usage: response.usage,
+      projectId: bundle.projectId,
+      jobId: bundle.jobId,
+      pageUrl: bundle.page.url,
+    });
 
     const markdown = response.content
       .filter((b) => b.type === "text")
