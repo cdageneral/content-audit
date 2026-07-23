@@ -118,7 +118,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         );
       }
 
-      const scored = await scorePage(simPage, params.pageId, weights, contentHash, serpContext);
+      const scored = await scorePage(simPage, params.pageId, weights, contentHash, serpContext, "simulate");
       if (scored.modelVersion === "error") {
         return NextResponse.json(
           { error: "Scoring failed — please try again" },
