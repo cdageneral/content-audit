@@ -152,18 +152,35 @@ function urlVariantsDfs(pageUrl: string): string[] {
   return out.filter((v, i) => out.indexOf(v) === i);
 }
 
+// Per-host memo of which variant index matched last (module state survives
+// across pages within a warm lambda / batch loop). Every Labs call is paid,
+// so once one page on a host resolves — e.g. to www + trailing slash — all
+// subsequent pages on that host try the winning shape first instead of
+// burning up to 3 misses per page.
+const hostVariantHint = new Map<string, number>();
+
 export async function fetchUrlKeywordsDfs(
   pageUrl: string,
   database: string,
   limit: number
 ): Promise<DfsKeywordsResult> {
   const loc = locFor(database);
+  const host = hostnameOf(pageUrl);
+  const variants = urlVariantsDfs(pageUrl);
+  const hint = hostVariantHint.get(host);
+  const order =
+    hint !== undefined && hint > 0 && hint < variants.length
+      ? [variants[hint], ...variants.filter((_, i) => i !== hint)]
+      : variants;
   let totalCost = 0;
 
-  for (const variant of urlVariantsDfs(pageUrl)) {
+  for (const variant of order) {
     const { rows, costUsd } = await fetchVariantKeywordsDfs(variant, loc, limit);
     totalCost += costUsd;
-    if (rows.length > 0) return { rows, costUsd: totalCost, matchedUrl: variant };
+    if (rows.length > 0) {
+      hostVariantHint.set(host, variants.indexOf(variant));
+      return { rows, costUsd: totalCost, matchedUrl: variant };
+    }
   }
   return { rows: [], costUsd: totalCost, matchedUrl: pageUrl };
 }
