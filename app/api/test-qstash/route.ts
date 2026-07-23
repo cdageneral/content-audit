@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { Client } from "@upstash/qstash";
 import Anthropic from "@anthropic-ai/sdk";
+import { recordAnthropicCall } from "@/lib/usage/record";
 
 export async function GET() {
   const results: Record<string, string> = {};
@@ -25,6 +26,11 @@ export async function GET() {
         model: "claude-haiku-4-5-20251001",
         max_tokens: 10,
         messages: [{ role: "user", content: "Reply with OK" }],
+      });
+      await recordAnthropicCall({
+        purpose: "test",
+        model: "claude-haiku-4-5-20251001",
+        usage: msg.usage,
       });
       results.anthropic_test = `✓ Success — model responded: "${(msg.content[0] as any).text}"`;
     } catch (err: any) {
