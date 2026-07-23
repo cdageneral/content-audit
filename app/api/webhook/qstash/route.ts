@@ -518,6 +518,20 @@ function normalizeQ(s: string): string {
   return s.toLowerCase().replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Loose URL identity for "is this OUR page" checks: protocol, www, trailing
+ * slash, and case differences don't make it a different page. (The crawl may
+ * store https://iquanti.com/careers while Google cites
+ * https://www.iquanti.com/careers/ — same page.)
+ */
+function urlKey(u: string): string {
+  return u
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+}
+
 async function handleSerpBatch(
   msg: SerpBatchMessage & { type: string }
 ): Promise<void> {
@@ -675,7 +689,7 @@ async function handleSerpBatch(
               title: ref.title,
               isClient,
             });
-            if (isClient && row && ref.url.replace(/\/$/, "") === page.url.replace(/\/$/, "")) {
+            if (isClient && row && urlKey(ref.url) === urlKey(page.url)) {
               row.aioCited = true;
             }
           });
@@ -684,7 +698,7 @@ async function handleSerpBatch(
           live.paaQuestions.forEach((q, i) => {
             const srcHost = q.sourceDomain.replace(/^www\./, "");
             const ownedByPage =
-              srcHost === pageHost && q.sourceUrl.replace(/\/$/, "") === page.url.replace(/\/$/, "");
+              srcHost === pageHost && urlKey(q.sourceUrl) === urlKey(page.url);
             if (row && q.question) row.paaPresent = true;
             if (ownedByPage && row) row.paaOwned = true;
             occupants.push({
@@ -753,8 +767,8 @@ async function handleSerpBatch(
       const emsg = String(err);
       // A dead key / zero unit balance fails every page identically — stop
       // the batch instead of burning retries page by page.
-      if (/UNITS|WRONG KEY|LIMIT EXCEEDED|40100|40200|40201|Payment Required|credentials not set/i.test(emsg)) {
-        console.error(`[serp] Job ${jobId}: Semrush account error — stopping batch: ${emsg}`);
+      if (/UNITS|WRONG KEY|LIMIT EXCEEDED|40100|40104|40200|40201|Payment Required|verify your account|credentials not set/i.test(emsg)) {
+        console.error(`[serp] Job ${jobId}: SERP provider account error — stopping batch: ${emsg}`);
         return;
       }
       console.error(`[serp] ${page.url}:`, err);
