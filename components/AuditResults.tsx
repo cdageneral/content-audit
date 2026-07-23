@@ -20,6 +20,7 @@ import type {
 } from "@/lib/types";
 import {
   DIMENSION_LABELS,
+  DIMENSION_GROUPS,
   ALL_BUCKETS,
   BUCKET_LABELS,
   BUCKET_DESCRIPTIONS,
@@ -176,6 +177,30 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
     score: summary.averageByDimension[dim],
   }));
 
+  // ── Group rollups for "Top Issues to Fix" ────────────────────────────────
+  // Three buckets (the radar keeps the per-dimension detail): each is the
+  // plain average of its member dimensions, per page, then across pages.
+  // Failed-scoring placeholders are excluded, matching computeAuditSummary.
+  const GROUP_BUCKETS: { label: string; dims: ScoreDimension[] }[] = [
+    { label: "Content Quality", dims: DIMENSION_GROUPS.contentQuality },
+    { label: "AI Accessibility", dims: DIMENSION_GROUPS.theAblesGroup },
+    { label: "SERP Visibility", dims: DIMENSION_GROUPS.searchVisibility },
+  ];
+  const realScores = scores.filter((s) => s.modelVersion !== "error");
+  const groupIssues = GROUP_BUCKETS.map((g) => {
+    const perPage = realScores.map(
+      (s) => g.dims.reduce((t, d) => t + s.scores[d], 0) / g.dims.length
+    );
+    const avg = perPage.length
+      ? Math.round(perPage.reduce((a, b) => a + b, 0) / perPage.length)
+      : 0;
+    return {
+      label: g.label,
+      averageScore: avg,
+      affectedPages: perPage.filter((v) => v < 50).length,
+    };
+  }).sort((a, b) => a.averageScore - b.averageScore);
+
   return (
     <div className="space-y-6">
       {/* Summary row */}
@@ -288,15 +313,15 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
             Top Issues to Fix
             <InfoTip
               title="Top Issues to Fix"
-              text="All 10 dimensions ranked weakest to strongest, with how many pages fall below 50 on each. Fixing the top of this list sitewide moves the average score fastest."
+              text="Your three score groups ranked weakest to strongest: Content Quality (core intent, edge cases, implied questions, fan-out), AI Accessibility (retrievable, extractable, citable, reusable), and SERP Visibility (AIO readiness, PAA coverage). Each group is the average of its dimensions; the page count shows how many pages average below 50 on that group. The radar to the left keeps the per-dimension detail."
             />
           </h3>
-          {summary.topIssues.map((issue) => (
-            <div key={issue.dimension} className="flex items-center gap-3">
+          {groupIssues.map((issue) => (
+            <div key={issue.label} className="flex items-center gap-3">
               <div className="w-full">
                 <div className="flex justify-between mb-1">
                   <span className="text-xs text-slate-700">
-                    {DIMENSION_LABELS[issue.dimension]}
+                    {issue.label}
                   </span>
                   <span className="text-xs font-mono text-slate-500">
                     avg {issue.averageScore} · {issue.affectedPages} pages &lt; 50
