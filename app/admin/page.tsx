@@ -13,6 +13,7 @@
  */
 
 import { useEffect, useState, useCallback, Fragment } from 'react';
+import AdminUsageTab from '@/components/AdminUsageTab';
 
 const BRAND = 'Meridian';
 
@@ -31,7 +32,7 @@ interface Company {
 }
 interface Me { role: Role; companyId: string | null }
 
-type Tab = 'companies' | 'users' | 'add' | 'activity';
+type Tab = 'companies' | 'users' | 'add' | 'activity' | 'usage';
 
 /* ── helpers ─────────────────────────────────────────────────────────────── */
 function timeAgo(iso: string | null): string {
@@ -104,7 +105,7 @@ export default function AdminPage() {
   }
 
   const tabs: [Tab, string][] = isSuper
-    ? [['companies', 'Companies'], ['users', 'Users'], ['add', 'Add User'], ['activity', 'Activity']]
+    ? [['companies', 'Companies'], ['users', 'Users'], ['add', 'Add User'], ['activity', 'Activity'], ['usage', 'API Usage']]
     : [['users', 'Users'], ['add', 'Add User'], ['activity', 'Activity']];
 
   return (
@@ -162,6 +163,7 @@ export default function AdminPage() {
           {tab === 'users'    && <UsersTab loading={loading} users={users} projects={projects} isSuper={isSuper} companyName={companyName} projName={projName} companies={companies} reload={load} />}
           {tab === 'add'      && <AddUserTab isSuper={isSuper} companies={companies} projects={projects} onDone={() => { setTab('users'); load(); }} />}
           {tab === 'activity' && <ActivityTab />}
+          {tab === 'usage'    && isSuper && <AdminUsageTab />}
         </div>
       )}
     </div>
