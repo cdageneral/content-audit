@@ -112,6 +112,44 @@ async function dfsPost(path: string, payload: Record<string, unknown>): Promise<
 export interface DfsKeywordsResult {
   rows: SerpKeywordRow[];
   costUsd: number;
+  /** The URL variant DataForSEO actually matched (may differ from input in www/trailing slash). */
+  matchedUrl: string;
+}
+
+function toggleSlashDfs(url: string): string {
+  return url.endsWith("/") ? url.slice(0, -1) : `${url}/`;
+}
+
+function toggleWwwDfs(url: string): string {
+  try {
+    const u = new URL(url);
+    u.hostname = u.hostname.startsWith("www.")
+      ? u.hostname.slice(4)
+      : `www.${u.hostname}`;
+    return u.toString().replace(/\/$/, url.endsWith("/") ? "/" : "");
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * DataForSEO's Labs target is an EXACT page-URL match against its index —
+ * "https://iquanti.com/careers" finds nothing when the site canonically
+ * lives at "https://www.iquanti.com/careers/". Crawl-stored URLs and index
+ * URLs routinely disagree on www and trailing slash, so try all four
+ * combinations and stop at the first variant that returns rows.
+ * (Verified live 2026-07-23: iquanti.com stored bare/no-slash, ranked
+ * exclusively as www + slash — exact-match-only returned zero for 13/13.)
+ */
+function urlVariantsDfs(pageUrl: string): string[] {
+  const withWwwToggled = toggleWwwDfs(pageUrl);
+  const out = [
+    pageUrl,
+    toggleSlashDfs(pageUrl),
+    withWwwToggled,
+    toggleSlashDfs(withWwwToggled),
+  ];
+  return out.filter((v, i) => out.indexOf(v) === i);
 }
 
 export async function fetchUrlKeywordsDfs(
@@ -120,6 +158,21 @@ export async function fetchUrlKeywordsDfs(
   limit: number
 ): Promise<DfsKeywordsResult> {
   const loc = locFor(database);
+  let totalCost = 0;
+
+  for (const variant of urlVariantsDfs(pageUrl)) {
+    const { rows, costUsd } = await fetchVariantKeywordsDfs(variant, loc, limit);
+    totalCost += costUsd;
+    if (rows.length > 0) return { rows, costUsd: totalCost, matchedUrl: variant };
+  }
+  return { rows: [], costUsd: totalCost, matchedUrl: pageUrl };
+}
+
+async function fetchVariantKeywordsDfs(
+  pageUrl: string,
+  loc: { location_code: number; language_code: string },
+  limit: number
+): Promise<{ rows: SerpKeywordRow[]; costUsd: number }> {
   const { result, costUsd } = await dfsPost("/dataforseo_labs/google/ranked_keywords/live", {
     target: pageUrl,
     location_code: loc.location_code,
