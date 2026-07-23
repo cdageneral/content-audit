@@ -583,14 +583,16 @@ export function computeAuditSummary(allScores: PageScore[]) {
   const gradeDistribution: Record<string, number> = { A: 0, B: 0, C: 0, D: 0, F: 0 };
   for (const s of scores) gradeDistribution[s.grade]++;
 
+  // All 10 dimensions, ranked weakest → strongest — the card shows the full
+  // list so the Search Visibility dims are always visible, not just the
+  // bottom four.
   const topIssues = dims
     .map((dim) => ({
       dimension: dim,
       affectedPages: scores.filter((s) => s.scores[dim] < 50).length,
       averageScore: averageByDimension[dim],
     }))
-    .sort((a, b) => a.averageScore - b.averageScore)
-    .slice(0, 4);
+    .sort((a, b) => a.averageScore - b.averageScore);
 
   // URL tiebreak: two pages with equal scores must rank identically on every
   // run — score-only sorting lets ties swap places between renders.
