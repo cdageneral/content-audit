@@ -17,6 +17,7 @@ import { neon } from "@neondatabase/serverless";
 import { getScoresByJob, ensureSchemaPatches } from "@/lib/db/client";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
 import type { PageScore, ScoreDimension } from "@/lib/types";
+import { recordAnthropicCall } from "@/lib/usage/record";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -134,6 +135,15 @@ export async function POST(req: NextRequest, { params }: Params) {
       temperature: 0,
       messages: [{ role: "user", content: prompt }],
     });
+    await recordAnthropicCall({
+      purpose: "gap_brief",
+      model: BRIEF_MODEL,
+      usage: response.usage,
+      projectId: params.id,
+      jobId: clientJobId ?? null,
+      meta: { dimension, competitorId },
+    });
+
     const brief = response.content
       .filter((b) => b.type === "text")
       .map((b) => (b.type === "text" ? b.text : ""))
