@@ -146,11 +146,20 @@ export interface SnapshotInput {
 export async function insertSnapshot(input: SnapshotInput): Promise<string> {
   await ensureSerpSchema();
   const sql = db();
-  // Idempotent per (page, job): QStash retries must not duplicate rows.
+  // Replace semantics (upsertScore pattern): "Refresh SERP data" on the same
+  // job must overwrite the prior snapshot, not silently no-op — otherwise a
+  // job whose first pass stored bad/empty data can never be corrected.
+  // Delete-then-insert keeps QStash retries duplicate-free all the same.
   const existing = await sql`
     SELECT id FROM serp_snapshots WHERE job_id = ${input.jobId} AND page_id = ${input.pageId}
   `;
-  if (existing.length > 0) return existing[0].id as string;
+  for (const row of existing) {
+    const oldId = row.id as string;
+    await sql`DELETE FROM serp_keywords WHERE snapshot_id = ${oldId}`;
+    await sql`DELETE FROM serp_questions WHERE snapshot_id = ${oldId}`;
+    await sql`DELETE FROM serp_occupants WHERE snapshot_id = ${oldId}`.catch(() => undefined);
+    await sql`DELETE FROM serp_snapshots WHERE id = ${oldId}`;
+  }
 
   const snap = await sql`
     INSERT INTO serp_snapshots
