@@ -29,6 +29,7 @@ import {
 import type { ResearchSuggestion } from "@/lib/db/drafts";
 import { DIMENSION_LABELS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
+import { recordAnthropicCall } from "@/lib/usage/record";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -153,6 +154,15 @@ Hard rules:
         "You are a meticulous research assistant for a content-optimization tool. You only report what the web searches actually returned, with exact source attribution. You always finish by calling the record_research_suggestions tool.",
       tools,
       messages: [{ role: "user", content: userMessage }],
+    });
+
+    await recordAnthropicCall({
+      purpose: "research",
+      model: RESEARCH_MODEL,
+      usage: response.usage,
+      projectId: bundle.projectId,
+      jobId: bundle.jobId,
+      pageUrl: bundle.page.url,
     });
 
     // Hosts that actually appeared in real search results — the provenance
