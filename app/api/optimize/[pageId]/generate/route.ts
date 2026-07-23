@@ -13,6 +13,7 @@ import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
+import { recordAnthropicCall } from "@/lib/usage/record";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 120;
@@ -134,6 +135,15 @@ Write ONE insertable markdown section (starting with a "## " heading) that weave
         throw err;
       }
     }
+
+    await recordAnthropicCall({
+      purpose: "generate",
+      model: GENERATE_MODEL,
+      usage: response.usage,
+      projectId: bundle.projectId,
+      jobId: bundle.jobId,
+      pageUrl: bundle.page.url,
+    });
 
     const markdown = response.content
       .filter((b) => b.type === "text")
