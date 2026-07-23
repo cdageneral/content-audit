@@ -106,7 +106,7 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     // Mismatch: score the live page fresh with the exact production engine,
     // and explain the difference.
-    const scored = await scorePage(live, params.pageId, weights, liveHash);
+    const scored = await scorePage(live, params.pageId, weights, liveHash, undefined, "verify");
 
     const draftPage = draftToCrawledPage(
       bundle.jobId,
