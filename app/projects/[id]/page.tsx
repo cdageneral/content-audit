@@ -523,7 +523,8 @@ function computeQuickSummary(scores: Awaited<ReturnType<typeof getScoresByJob>>)
   const avgScore = Math.round(scores.reduce((s,p) => s + p.overallScore, 0) / scores.length);
   const grades: Record<string,number> = {A:0,B:0,C:0,D:0,F:0};
   scores.forEach(s => grades[s.grade] = (grades[s.grade]||0) + 1);
-  const topIssues = dims.map(d => ({ dimension: d, affectedPages: scores.filter(s => s.scores[d] < 50).length, averageScore: avgByDim[d] })).sort((a,b) => a.averageScore - b.averageScore).slice(0,4);
+  // All 10 dimensions ranked weakest → strongest (full list, no bottom-4 cut).
+  const topIssues = dims.map(d => ({ dimension: d, affectedPages: scores.filter(s => s.scores[d] < 50).length, averageScore: avgByDim[d] })).sort((a,b) => a.averageScore - b.averageScore);
   const sorted = [...scores].sort((a,b) => b.overallScore - a.overallScore);
   return { totalPages: scores.length, averageScore: avgScore, averageByDimension: avgByDim, gradeDistribution: grades, topIssues, topPages: sorted.slice(0,5).map(s => ({url:s.url,score:s.overallScore})), bottomPages: sorted.slice(-5).reverse().map(s => ({url:s.url,score:s.overallScore})) };
 }
