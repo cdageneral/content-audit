@@ -4,6 +4,23 @@
 // ─────────────────────────────────────────────────────────────
 
 import { Client, Receiver } from "@upstash/qstash";
+import { recordApiCall } from "@/lib/usage/record";
+import { QSTASH_PAYG_USD_PER_MESSAGE } from "@/lib/usage/pricing";
+
+// Ledger entry for one published QStash message. cost_usd stays NULL on
+// purpose: on the free tier (1,000 msgs/day) the real bill is $0 and the
+// account's plan isn't visible from here — the published pay-as-you-go rate
+// ($1 per 100K messages) rides along in meta so the admin panel can show it
+// as a footnote instead of asserting an unbilled dollar figure.
+async function recordPublish(purpose: string, jobId: string | null): Promise<void> {
+  await recordApiCall({
+    provider: "qstash",
+    purpose,
+    costUsd: null,
+    jobId,
+    meta: { payg_usd_per_message: QSTASH_PAYG_USD_PER_MESSAGE },
+  });
+}
 import type {
   CrawlBatchMessage,
   ScoreBatchMessage,
@@ -33,6 +50,7 @@ export async function enqueueCrawlBatch(msg: CrawlBatchMessage): Promise<void> {
     retries: 2,
     delay: 0,
   });
+  await recordPublish("queue_crawl_batch", msg.jobId ?? null);
 }
 
 // ── Dispatch multiple crawl batches ──────────────────────────
@@ -73,6 +91,7 @@ export async function enqueueScoreBatch(msg: ScoreBatchMessage): Promise<void> {
     retries: 2,
     delay: 2, // 2s delay to let DB writes settle
   });
+  await recordPublish("queue_score_batch", msg.jobId ?? null);
 }
 
 // ── Dispatch a SERP-visibility batch (AIO/PAA detection) ─────
@@ -93,6 +112,7 @@ export async function enqueueSerpBatch(msg: SerpBatchMessage): Promise<void> {
     retries: 2,
     delay: 2,
   });
+  await recordPublish("queue_serp_batch", msg.jobId ?? null);
 }
 
 // ── Dispatch a classification-only batch (backfill) ───────────
@@ -107,6 +127,7 @@ export async function enqueueClassifyBatch(msg: ClassifyBatchMessage): Promise<v
     retries: 2,
     delay: 0,
   });
+  await recordPublish("queue_classify_batch", msg.jobId ?? null);
 }
 
 // ── Verify QStash webhook signature ──────────────────────────
