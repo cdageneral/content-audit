@@ -15,6 +15,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { neon } from "@neondatabase/serverless";
 import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
+import { resolveVisibilityTargets } from "@/lib/serp/visibility";
+import type { VisibilityKeyword } from "@/lib/serp/visibility";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
 import { recordAnthropicCall } from "@/lib/usage/record";
@@ -43,6 +45,14 @@ export async function POST(req: NextRequest, { params }: Params) {
         typeof d === "string" && (ALL_DIMENSIONS as string[]).includes(d)
       )
       .slice(0, 4);
+    // Checked visibility targets (keywords only) — resolved server-side
+    // against the stored SERP snapshot below, so the prompt only ever carries
+    // real stored queries with their real volume/position.
+    const requestedVisTargets: string[] = Array.isArray(body.visibilityTargets)
+      ? (body.visibilityTargets as unknown[])
+          .filter((t): t is string => typeof t === "string")
+          .slice(0, 12)
+      : [];
     const title = typeof body.title === "string" ? body.title : "";
     const metaDescription =
       typeof body.metaDescription === "string" ? body.metaDescription : "";
@@ -73,6 +83,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     // the model optimizes against the authoritative stored audit — not
     // whatever a client chose to send).
     const auditContext = await loadAuditContext(params.pageId, targets);
+    const visTargets = await resolveVisibilityTargets(
+      bundle.page.url,
+      requestedVisTargets
+    ).catch(() => [] as VisibilityKeyword[]);
 
     const prompt = buildRewritePrompt(
       bundle.page.url,
@@ -80,7 +94,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       metaDescription,
       bodyMd,
       targets,
-      auditContext
+      auditContext,
+      visTargets
     );
 
     const anthropic = new Anthropic({
@@ -215,7 +230,8 @@ function buildRewritePrompt(
   metaDescription: string,
   bodyMd: string,
   targets: ScoreDimension[],
-  ctx: AuditContext
+  ctx: AuditContext,
+  visTargets: VisibilityKeyword[] = []
 ): string {
   const targetBlocks = targets
     .map((dim) => {
@@ -234,6 +250,25 @@ function buildRewritePrompt(
     .map((r) => `- [${r.priority}] (${DIMENSION_LABELS[r.dimension]}) ${r.suggestion}`)
     .join("\n");
 
+  // Verified search-visibility targets: real Google queries this page ranks
+  // for where the AI Overview does not currently cite it (stored SERP data —
+  // never modeled). Kept as a separate brief section so the model treats them
+  // as named coverage targets alongside the dimension findings, in ONE brief.
+  const visBlock = visTargets.length
+    ? `\n## Verified search-visibility targets (real Google SERP data for this URL)
+
+These queries were captured from live Google SERPs. The page ranks for each, but the AI Overview shown for it does NOT cite this page:
+
+${visTargets
+        .map(
+          (t) =>
+            `- "${t.keyword}" (${t.volume.toLocaleString()}/mo · current position #${t.position}${t.aioTriggered ? " · AI Overview shown, this page not cited" : ""})`
+        )
+        .join("\n")}
+
+For each target query, make sure the rewrite contains a clear, self-contained, quotable passage that directly and completely answers it (a heading matching the query's intent plus a direct answer in the first sentence works well). Draw only on facts already in the content — where real data is needed, use an [ADD: …] placeholder per rule 1.\n`
+    : "";
+
   return `## The audit's scoring rubric (this is exactly how the rewritten page will be graded)
 
 ${SCORING_SYSTEM_PROMPT}
@@ -245,7 +280,7 @@ ${targetBlocks || "(no stored findings — improve against the rubric definition
 ## Stored recommendations for these dimensions
 
 ${recs || "(none)"}
-
+${visBlock}
 ## The page
 
 URL: ${url}
