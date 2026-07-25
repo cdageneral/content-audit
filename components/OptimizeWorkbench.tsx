@@ -27,6 +27,7 @@ import type {
 // reaches the client bundle.
 import type { PageVisibility, VisibilityKeyword } from "@/lib/serp/visibility";
 import type { TargetCoverage } from "@/lib/db/drafts";
+import type { PromptRow, PromptEngine } from "@/lib/db/prompts";
 
 // ── Serialized (client-safe) shapes passed from the server page ──
 
@@ -89,8 +90,23 @@ export interface WorkbenchProps {
   simulations: WorkbenchSimulation[]; // latest per draft
   /** Stored SERP visibility for this URL (null = no snapshot yet). */
   visibility: PageVisibility | null;
+  /** Prompt Set rows matched to this URL (assigned or engine-cited). */
+  promptVisibility: PromptRow[];
   promptVersion: string;
   scoringModel: string;
+}
+
+const WB_ENGINE_ORDER: PromptEngine[] = ["chat_gpt", "perplexity", "gemini", "claude"];
+const WB_ENGINE_NAMES: Record<PromptEngine, string> = {
+  chat_gpt: "ChatGPT",
+  claude: "Claude",
+  gemini: "Gemini",
+  perplexity: "Perplexity",
+};
+
+/** A prompt is a citation gap unless some engine's latest check cites the page. */
+function isPromptGap(r: PromptRow): boolean {
+  return !Object.values(r.checks).some((c) => c && c.status === "ok" && c.cited);
 }
 
 type Tab = "content" | "details" | "diff";
@@ -199,14 +215,23 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     }
     return list.slice(0, 8);
   }, [props.visibility]);
+  // Prompt targets: prompts matched to this URL that no engine currently cites.
+  const promptTargets = useMemo<PromptRow[]>(
+    () => props.promptVisibility.filter(isPromptGap).slice(0, 6),
+    [props.promptVisibility]
+  );
   const [checkedTargets, setCheckedTargets] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     for (const t of targetList) init[t.keyword] = true;
+    for (const p of promptTargets) init[p.prompt] = true;
     return init;
   });
   const activeTargets = useMemo(
-    () => targetList.filter((t) => checkedTargets[t.keyword]).map((t) => t.keyword),
-    [targetList, checkedTargets]
+    () => [
+      ...targetList.filter((t) => checkedTargets[t.keyword]).map((t) => t.keyword),
+      ...promptTargets.filter((p) => checkedTargets[p.prompt]).map((p) => p.prompt),
+    ],
+    [targetList, promptTargets, checkedTargets]
   );
   const [visOpen, setVisOpen] = useState(false);
 
@@ -564,6 +589,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
           snapshot; zero provider calls on page load) */}
       <VisibilityStrip
         visibility={props.visibility}
+        prompts={props.promptVisibility}
         open={visOpen}
         onToggle={() => setVisOpen((o) => !o)}
       />
@@ -891,9 +917,10 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
           {/* Optimization Targets — checked targets feed Rewrite, Research,
               and Simulate coverage (merged server-side with the dimension
               findings into one brief; nothing is double-counted). */}
-          {targetList.length > 0 && (
+          {(targetList.length > 0 || promptTargets.length > 0) && (
             <TargetsCard
               targets={targetList}
+              promptTargets={promptTargets}
               headTermKeyword={props.visibility?.headTerm?.keyword ?? null}
               checked={checkedTargets}
               onToggle={(kw, on) => setCheckedTargets((c) => ({ ...c, [kw]: on }))}
@@ -1206,16 +1233,62 @@ function AioPill({ k }: { k: VisibilityKeyword }) {
   return <span className="rounded-full bg-red-50 border border-red-200 text-red-600 px-2 py-0.5 text-[10px] font-bold">AIO · not cited</span>;
 }
 
+function PromptEngineChips({ row }: { row: PromptRow }) {
+  return (
+    <span className="inline-flex gap-1 flex-wrap">
+      {WB_ENGINE_ORDER.map((e) => {
+        const c = row.checks[e];
+        const cls = !c || c.status === "error"
+          ? "border-slate-200 bg-slate-50 text-slate-400"
+          : c.cited
+          ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+          : c.brandMentioned
+          ? "border-amber-200 bg-amber-50 text-amber-800"
+          : "border-red-200 bg-red-50 text-red-600";
+        const label = !c
+          ? "—"
+          : c.status === "error"
+          ? "err"
+          : c.cited
+          ? "✓"
+          : c.brandMentioned
+          ? "brand"
+          : "✗";
+        const title = !c
+          ? `${WB_ENGINE_NAMES[e]}: not checked yet`
+          : c.status === "error"
+          ? `${WB_ENGINE_NAMES[e]}: check failed`
+          : c.cited
+          ? `${WB_ENGINE_NAMES[e]} cites ${c.citedUrl ?? "your site"}`
+          : c.brandMentioned
+          ? `${WB_ENGINE_NAMES[e]}: brand named in the answer, no link`
+          : `${WB_ENGINE_NAMES[e]}: not in the answer`;
+        return (
+          <span
+            key={e}
+            title={title}
+            className={`rounded-md border px-1.5 py-0.5 text-[9.5px] font-bold ${cls}`}
+          >
+            {WB_ENGINE_NAMES[e]} {label}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 function VisibilityStrip({
   visibility,
+  prompts,
   open,
   onToggle,
 }: {
   visibility: PageVisibility | null;
+  prompts: PromptRow[];
   open: boolean;
   onToggle: () => void;
 }) {
-  if (!visibility) {
+  if (!visibility && prompts.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white px-5 py-3 flex items-center gap-3 flex-wrap">
         <h3 className="text-sm font-semibold text-slate-700">Search &amp; AI Visibility</h3>
@@ -1228,7 +1301,7 @@ function VisibilityStrip({
     );
   }
   const v = visibility;
-  const head = v.headTerm;
+  const head = v?.headTerm ?? null;
   return (
     <div className="rounded-xl border border-indigo-200 bg-white overflow-hidden">
       <div className="px-5 py-3 flex items-center gap-x-6 gap-y-2 flex-wrap bg-gradient-to-b from-indigo-50/60 to-white">
@@ -1257,20 +1330,32 @@ function VisibilityStrip({
             <div>
               <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>AI Overviews</span>
               <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
-                cited {v.aioCited}<span className="text-slate-400 font-semibold"> of {v.aioQueries}</span>
+                cited {v!.aioCited}<span className="text-slate-400 font-semibold"> of {v!.aioQueries}</span>
               </span>
             </div>
             <div>
               <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>PAA owned</span>
               <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
-                {v.paaOwned}<span className="text-slate-400 font-semibold"> of {v.paaBoxes}</span>
+                {v!.paaOwned}<span className="text-slate-400 font-semibold"> of {v!.paaBoxes}</span>
               </span>
             </div>
           </>
         ) : (
           <p className="text-xs" style={{ color: "var(--text-3)" }}>
-            Snapshot exists but holds no ranked keywords for this URL.
+            {v
+              ? "Snapshot exists but holds no ranked keywords for this URL."
+              : "No Google SERP snapshot for this URL yet."}
           </p>
+        )}
+        {prompts.length > 0 && (
+          <div>
+            <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>Prompts</span>
+            <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
+              cited{" "}
+              {prompts.filter((p) => !isPromptGap(p)).length}
+              <span className="text-slate-400 font-semibold"> of {prompts.length}</span>
+            </span>
+          </div>
         )}
         <button
           onClick={onToggle}
@@ -1281,6 +1366,7 @@ function VisibilityStrip({
       </div>
       {open && (
         <div className="border-t border-slate-100">
+          {v && (
           <div className="px-5 py-3 overflow-x-auto">
             <table className="w-full text-[11.5px]">
               <thead>
@@ -1313,18 +1399,36 @@ function VisibilityStrip({
               </tbody>
             </table>
           </div>
+          )}
           <div className="px-5 py-2.5 border-t border-slate-100 bg-slate-50/60">
-            <p className="text-[10.5px] font-bold uppercase tracking-wide text-slate-500 mb-1">LLM Prompt Set</p>
-            <p className="text-[11px]" style={{ color: "var(--text-3)" }}>
-              No prompt checks yet — LLM prompt tracking (ChatGPT / Perplexity / Gemini citation
-              &amp; brand-mention checks) is not active. Prompts matched to this URL will appear
-              here once the tracking pipeline is live. Nothing shown here is ever estimated.
-            </p>
+            <p className="text-[10.5px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">LLM Prompt Set</p>
+            {prompts.length === 0 ? (
+              <p className="text-[11px]" style={{ color: "var(--text-3)" }}>
+                No prompts matched to this URL yet. Manage the project&apos;s Prompt Set (and run
+                per-engine checks) from the LLM Prompt Set card on the project page — prompts
+                assigned to this page, or whose answers cite it, appear here. Nothing shown here
+                is ever estimated.
+              </p>
+            ) : (
+              <div className="space-y-1.5">
+                {prompts.map((p) => (
+                  <div key={p.id} className="flex items-start justify-between gap-3 flex-wrap">
+                    <span className="text-[11.5px] font-semibold text-slate-700 min-w-0">
+                      &ldquo;{p.prompt}&rdquo;
+                    </span>
+                    <PromptEngineChips row={p} />
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="px-5 py-2 border-t border-slate-100 text-[10px]" style={{ color: "var(--text-3)" }}>
-            Source: live Google SERP snapshot ({v.database}) captured {v.fetchedAt.slice(0, 10)}
-            {v.prevFetchedAt ? ` · deltas vs ${v.prevFetchedAt.slice(0, 10)}` : ""} · verified data
-            only — no modeled figures.
+            {v
+              ? `Source: live Google SERP snapshot (${v.database}) captured ${v.fetchedAt.slice(0, 10)}${
+                  v.prevFetchedAt ? ` · deltas vs ${v.prevFetchedAt.slice(0, 10)}` : ""
+                } · `
+              : "Source: "}
+            prompt checks are live per-engine answers · verified data only — no modeled figures.
           </div>
         </div>
       )}
@@ -1336,16 +1440,21 @@ function VisibilityStrip({
 
 function TargetsCard({
   targets,
+  promptTargets,
   headTermKeyword,
   checked,
   onToggle,
 }: {
   targets: VisibilityKeyword[];
+  promptTargets: PromptRow[];
   headTermKeyword: string | null;
   checked: Record<string, boolean>;
   onToggle: (keyword: string, on: boolean) => void;
 }) {
-  const activeCount = targets.filter((t) => checked[t.keyword]).length;
+  const totalCount = targets.length + promptTargets.length;
+  const activeCount =
+    targets.filter((t) => checked[t.keyword]).length +
+    promptTargets.filter((p) => checked[p.prompt]).length;
   return (
     <div className="rounded-xl border border-indigo-200 bg-white overflow-hidden">
       <div className="px-4 py-3 border-b border-indigo-100 bg-gradient-to-b from-indigo-50/60 to-white">
@@ -1385,9 +1494,31 @@ function TargetsCard({
             </span>
           </label>
         ))}
+        {promptTargets.map((p) => (
+          <label
+            key={p.id}
+            className="flex items-start gap-2.5 px-4 py-2.5 border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-slate-50 transition-colors"
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={checked[p.prompt] === true}
+              onChange={(e) => onToggle(p.prompt, e.target.checked)}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-semibold text-slate-800">&ldquo;{p.prompt}&rdquo;</span>
+              <span className="flex items-center gap-2 mt-1 text-[10.5px] text-slate-500 flex-wrap">
+                <span className="rounded bg-violet-50 border border-violet-200 text-violet-700 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
+                  Prompt
+                </span>
+                <PromptEngineChips row={p} />
+              </span>
+            </span>
+          </label>
+        ))}
       </div>
       <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/60 text-[10px]" style={{ color: "var(--text-3)" }}>
-        {activeCount} of {targets.length} targets active · named dimension gaps are always included
+        {activeCount} of {totalCount} targets active · named dimension gaps are always included
         automatically — nothing is double-counted.
       </div>
     </div>
