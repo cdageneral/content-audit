@@ -252,3 +252,53 @@ export function isBrandedKeyword(keyword: string, clientName: string): boolean {
     .filter((t) => t.length >= 4)
     .some((t) => kw.includes(t));
 }
+
+// ── Batch per-keyword volumes (phrase_these) ─────────────────
+//
+// Why: Google Ads (the source behind DataForSEO Labs' search_volume) groups
+// close variants — every variant of a cluster inherits the cluster's TOTAL
+// volume ("cd rate", "cd rates", "cd certificate of deposit rates" all show
+// 165K). Semrush reports distinct per-keyword volumes, so when the Semrush
+// key is configured we override the grouped numbers with these (Wayne's
+// decision 2026-07-25). Keywords Semrush doesn't know keep their original
+// value — both sources are real data; nothing is invented.
+
+export interface VolumesResult {
+  /** lowercased keyword → distinct monthly volume */
+  volumes: Map<string, number>;
+  unitsSpent: number;
+}
+
+export async function fetchVolumesSemrush(
+  keywords: string[],
+  database: string
+): Promise<VolumesResult> {
+  const volumes = new Map<string, number>();
+  let unitsSpent = 0;
+  // Semicolon is the API's separator — a keyword containing one can't be
+  // queried safely; dedupe the rest.
+  const clean = Array.from(
+    new Set(
+      keywords.map((k) => k.trim().toLowerCase()).filter((k) => k && !k.includes(";"))
+    )
+  );
+  for (let i = 0; i < clean.length; i += 100) {
+    const batch = clean.slice(i, i + 100);
+    const text = await semrushGet({
+      type: "phrase_these",
+      phrase: batch.join(";"),
+      database,
+      export_columns: "Ph,Nq",
+    });
+    if (isNothingFound(text)) continue;
+    assertNoApiError(text);
+    const rows = parseCsv(text);
+    for (const rec of rows) {
+      const kw = pickColumn(rec, ["keyword", "ph"]).toLowerCase();
+      const vol = parseInt(pickColumn(rec, ["search volume", "nq"]), 10);
+      if (kw && Number.isFinite(vol)) volumes.set(kw, vol);
+    }
+    unitsSpent += rows.length * UNITS_PER_LINE;
+  }
+  return { volumes, unitsSpent };
+}
