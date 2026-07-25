@@ -158,25 +158,31 @@ export async function runLlmPrompt(
     payload.web_search = true;
   }
 
-  try {
-    return await postLive(engine, payload);
-  } catch (err) {
-    // Model-quirk retries: some models reject specific fields (e.g. ChatGPT
-    // reasoning-family models 40501 "does not support 'temperature'"; an
-    // engine may reject web-search flags). Strip the offending field and
-    // retry once rather than failing the whole check. Temperature is checked
-    // FIRST — its error message also matches the generic "Invalid Field".
-    const msg = String((err as Error)?.message ?? "");
-    if (/temperature/i.test(msg) && "temperature" in payload) {
-      const { temperature: _t, ...bare } = payload;
-      return await postLive(engine, bare);
+  // Model-quirk retry loop: models reject specific optional fields with
+  // 40501 "this model does not support 'X'" (observed live: gpt-5-family
+  // rejected 'temperature', then 'force_web_search'). Strip exactly the
+  // named field and retry — up to 3 strips before giving up. If the error
+  // names no field but mentions web search, drop both web flags.
+  const attempt: Record<string, unknown> = { ...payload };
+  for (let i = 0; i < 4; i++) {
+    try {
+      return await postLive(engine, attempt);
+    } catch (err) {
+      const msg = String((err as Error)?.message ?? "");
+      const named = msg.match(/does not support '([a-z_]+)'/i)?.[1];
+      if (named && named in attempt) {
+        delete attempt[named];
+        continue;
+      }
+      if (/web_search|invalid field/i.test(msg) && "web_search" in attempt) {
+        delete attempt.web_search;
+        delete attempt.force_web_search;
+        continue;
+      }
+      throw err;
     }
-    if (/web_search|force_web_search|invalid field/i.test(msg) && "web_search" in payload) {
-      const { web_search: _a, force_web_search: _b, ...bare } = payload;
-      return await postLive(engine, bare);
-    }
-    throw err;
   }
+  throw new Error(`DataForSEO ${engine}: field-strip retries exhausted`);
 }
 
 async function postLive(
