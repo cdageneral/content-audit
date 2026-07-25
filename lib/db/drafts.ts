@@ -83,6 +83,12 @@ export function ensureOptimizeSchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_draft_sims_project_time
         ON draft_simulations(project_id, created_at)
       `;
+      // Target coverage (2026-07): deterministic per-target alignment check
+      // recorded alongside a simulation. NULL = simulation ran without
+      // visibility targets. Sandboxed like everything else in this table.
+      await sql`
+        ALTER TABLE draft_simulations ADD COLUMN IF NOT EXISTS coverage JSONB
+      `;
       // Phase 2: cached live-web research suggestions per (page, dimension).
       // Cache serves repeat opens for free; a new row is only written by a
       // fresh (paid) web-search call, so the row count doubles as the
@@ -156,6 +162,18 @@ export interface PageDraft {
   createdAt: Date;
 }
 
+/**
+ * Per-target content-alignment verdict from a simulation run. This is a
+ * deterministic (temp-0) check of whether the DRAFT substantively addresses
+ * the target query — it is NOT a prediction of rankings or AI citations;
+ * those are only ever measured post-publish by the next audit run.
+ */
+export interface TargetCoverage {
+  target: string;
+  status: "covered" | "partial" | "missing";
+  note: string;
+}
+
 export interface DraftSimulation {
   id: string;
   draftId: string;
@@ -173,6 +191,8 @@ export interface DraftSimulation {
   contentHash: string;
   weights: DimensionScores;
   reused: boolean;
+  /** null = simulation ran without visibility targets. */
+  coverage: TargetCoverage[] | null;
   createdAt: Date;
 }
 
@@ -243,13 +263,14 @@ export async function insertSimulation(
       draft_id, page_id, project_id, url,
       scores, rationale, evidence, recommendations,
       overall_score, grade, model_version, prompt_version,
-      content_hash, weights, reused
+      content_hash, weights, reused, coverage
     ) VALUES (
       ${sim.draftId}, ${sim.pageId}, ${sim.projectId}, ${sim.url},
       ${JSON.stringify(sim.scores)}, ${JSON.stringify(sim.rationale)},
       ${JSON.stringify(sim.evidence)}, ${JSON.stringify(sim.recommendations)},
       ${sim.overallScore}, ${sim.grade}, ${sim.modelVersion}, ${sim.promptVersion},
-      ${sim.contentHash}, ${JSON.stringify(sim.weights)}, ${sim.reused}
+      ${sim.contentHash}, ${JSON.stringify(sim.weights)}, ${sim.reused},
+      ${sim.coverage ? JSON.stringify(sim.coverage) : null}
     )
     RETURNING *
   `;
@@ -527,6 +548,7 @@ function rowToSim(r: Record<string, unknown>): DraftSimulation {
     contentHash: r.content_hash as string,
     weights: r.weights as DimensionScores,
     reused: (r.reused as boolean) ?? false,
+    coverage: (r.coverage as TargetCoverage[] | null) ?? null,
     createdAt: new Date(r.created_at as string),
   };
 }
