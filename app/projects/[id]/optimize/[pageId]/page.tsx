@@ -20,6 +20,7 @@ import {
 import { SCORING_MODEL } from "@/lib/scoring/index";
 import { PROMPT_VERSION } from "@/lib/scoring/prompt";
 import { getPageVisibility } from "@/lib/serp/visibility";
+import { getPromptRowsForUrl } from "@/lib/db/prompts";
 import OptimizeWorkbench from "@/components/OptimizeWorkbench";
 import type {
   WorkbenchBaseline,
@@ -50,11 +51,13 @@ export default async function OptimizePage({
 
   const baseline = await loadBaseline(params.pageId);
 
-  const [drafts, sims, visibility] = await Promise.all([
+  const [drafts, sims, visibility, promptRows] = await Promise.all([
     getDraftsByPage(params.pageId).catch(() => []),
     getSimulationsByPage(params.pageId).catch(() => []),
     // Stored SERP snapshot read only — no provider calls on page load.
     getPageVisibility(bundle.page.url).catch(() => null),
+    // Prompt Set rows matched to this URL (assigned or cited) — stored data only.
+    getPromptRowsForUrl(params.id, bundle.page.url).catch(() => []),
   ]);
 
   // Benchmark: strongest competitor's latest cached overall score.
@@ -112,6 +115,7 @@ export default async function OptimizePage({
       drafts={serializedDrafts}
       simulations={serializedSims}
       visibility={visibility}
+      promptVisibility={promptRows}
       promptVersion={PROMPT_VERSION}
       scoringModel={SCORING_MODEL}
     />
