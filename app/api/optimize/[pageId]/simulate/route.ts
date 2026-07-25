@@ -27,8 +27,7 @@ import {
 import type { TargetCoverage } from "@/lib/db/drafts";
 import { draftToCrawledPage } from "@/lib/optimize/transform";
 import { getSerpScoringContext } from "@/lib/serp/context";
-import { resolveVisibilityTargets } from "@/lib/serp/visibility";
-import type { VisibilityKeyword } from "@/lib/serp/visibility";
+import { resolveAllTargets } from "@/lib/serp/visibility";
 import {
   scorePage,
   computeContentHash,
@@ -105,10 +104,16 @@ export async function POST(req: NextRequest, { params }: Params) {
     // temp-0 call on the draft content — it never touches the scoring engine,
     // the prompt version, or the content hash, and a coverage failure never
     // fails the simulation.
-    const targets = await resolveVisibilityTargets(
+    const resolved = await resolveAllTargets(
       bundle.page.url,
+      bundle.projectId,
       requestedTargets
-    ).catch(() => [] as VisibilityKeyword[]);
+    ).catch(() => ({ serp: [], prompts: [] }));
+    // Coverage judges plain target strings — ranked keywords and prompts alike.
+    const targets = [
+      ...resolved.serp.map((k) => k.keyword),
+      ...resolved.prompts,
+    ].slice(0, 10);
 
     let simulation;
     if (reusable) {
@@ -243,7 +248,7 @@ const COVERAGE_TOOL = {
 
 async function assessTargetCoverage(
   simPage: { title: string; metaDescription: string; bodyText: string },
-  targets: VisibilityKeyword[],
+  targets: string[],
   ledger: { projectId: string; jobId: string; pageUrl: string }
 ): Promise<TargetCoverage[] | null> {
   if (targets.length === 0) return null;
@@ -253,9 +258,7 @@ async function assessTargetCoverage(
       timeout: 60_000,
       maxRetries: 1,
     });
-    const targetList = targets
-      .map((t, i) => `${i + 1}. "${t.keyword}"`)
-      .join("\n");
+    const targetList = targets.map((t, i) => `${i + 1}. "${t}"`).join("\n");
     const response = await anthropic.messages.create({
       model: SCORING_MODEL,
       max_tokens: 1024,
@@ -304,8 +307,8 @@ async function assessTargetCoverage(
         // reported honestly as unassessed rather than silently dropped.
         return targets.map(
           (t) =>
-            byTarget.get(t.keyword.toLowerCase()) ?? {
-              target: t.keyword,
+            byTarget.get(t.toLowerCase()) ?? {
+              target: t,
               status: "missing" as const,
               note: "Not assessed by the coverage check — re-run Simulate.",
             }
