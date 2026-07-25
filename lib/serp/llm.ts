@@ -65,25 +65,35 @@ async function pickModel(engine: PromptEngine): Promise<string> {
       headers: { Authorization: authHeader() },
     });
     if (!res.ok) throw new Error(`models HTTP ${res.status}`);
+    // Response shape (verified against DataForSEO docs): the model objects sit
+    // DIRECTLY in tasks[0].result[] — { model_name, reasoning,
+    // web_search_supported, task_post_supported }.
     const data = (await res.json()) as {
-      tasks?: { result?: { models?: { model_name?: string }[] }[] }[];
+      tasks?: {
+        result?: { model_name?: string; web_search_supported?: boolean }[];
+      }[];
     };
-    const models: string[] = [];
-    for (const r of data.tasks?.[0]?.result ?? []) {
-      for (const m of r.models ?? []) {
-        if (typeof m.model_name === "string") models.push(m.model_name);
+    const models: { name: string; web: boolean }[] = [];
+    for (const m of data.tasks?.[0]?.result ?? []) {
+      if (typeof m.model_name === "string") {
+        models.push({ name: m.model_name, web: m.web_search_supported === true });
       }
     }
     if (models.length === 0) throw new Error("models list empty");
+    // Prefer web-search-capable models (citations need grounding), then any.
+    const pools = [models.filter((m) => m.web), models];
     let chosen = "";
-    for (const pref of MODEL_PREFS[engine]) {
-      const hit = models.find((m) => pref.test(m));
-      if (hit) {
-        chosen = hit;
-        break;
+    for (const pool of pools) {
+      for (const pref of MODEL_PREFS[engine]) {
+        const hit = pool.find((m) => pref.test(m.name));
+        if (hit) {
+          chosen = hit.name;
+          break;
+        }
       }
+      if (!chosen && pool.length > 0) chosen = pool[0].name;
+      if (chosen) break;
     }
-    if (!chosen) chosen = models[0];
     modelCache.set(engine, chosen);
     return chosen;
   } finally {
