@@ -19,6 +19,7 @@ import {
 } from "@/lib/optimize/transform";
 import { SCORING_MODEL } from "@/lib/scoring/index";
 import { PROMPT_VERSION } from "@/lib/scoring/prompt";
+import { getPageVisibility } from "@/lib/serp/visibility";
 import OptimizeWorkbench from "@/components/OptimizeWorkbench";
 import type {
   WorkbenchBaseline,
@@ -49,9 +50,11 @@ export default async function OptimizePage({
 
   const baseline = await loadBaseline(params.pageId);
 
-  const [drafts, sims] = await Promise.all([
+  const [drafts, sims, visibility] = await Promise.all([
     getDraftsByPage(params.pageId).catch(() => []),
     getSimulationsByPage(params.pageId).catch(() => []),
+    // Stored SERP snapshot read only — no provider calls on page load.
+    getPageVisibility(bundle.page.url).catch(() => null),
   ]);
 
   // Benchmark: strongest competitor's latest cached overall score.
@@ -93,6 +96,7 @@ export default async function OptimizePage({
     modelVersion: s.modelVersion,
     promptVersion: s.promptVersion,
     reused: s.reused,
+    coverage: s.coverage,
     createdAt: s.createdAt.toISOString(),
   }));
 
@@ -107,6 +111,7 @@ export default async function OptimizePage({
       seed={seed}
       drafts={serializedDrafts}
       simulations={serializedSims}
+      visibility={visibility}
       promptVersion={PROMPT_VERSION}
       scoringModel={SCORING_MODEL}
     />
