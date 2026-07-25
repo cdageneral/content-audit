@@ -161,9 +161,16 @@ export async function runLlmPrompt(
   try {
     return await postLive(engine, payload);
   } catch (err) {
-    // Defensive: if an engine rejects a web-search field, retry bare rather
-    // than failing the whole check (the answer just loses grounding).
+    // Model-quirk retries: some models reject specific fields (e.g. ChatGPT
+    // reasoning-family models 40501 "does not support 'temperature'"; an
+    // engine may reject web-search flags). Strip the offending field and
+    // retry once rather than failing the whole check. Temperature is checked
+    // FIRST — its error message also matches the generic "Invalid Field".
     const msg = String((err as Error)?.message ?? "");
+    if (/temperature/i.test(msg) && "temperature" in payload) {
+      const { temperature: _t, ...bare } = payload;
+      return await postLive(engine, bare);
+    }
     if (/web_search|force_web_search|invalid field/i.test(msg) && "web_search" in payload) {
       const { web_search: _a, force_web_search: _b, ...bare } = payload;
       return await postLive(engine, bare);
