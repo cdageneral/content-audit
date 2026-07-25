@@ -27,6 +27,8 @@ import {
   countRecentResearch,
 } from "@/lib/db/drafts";
 import type { ResearchSuggestion } from "@/lib/db/drafts";
+import { resolveVisibilityTargets } from "@/lib/serp/visibility";
+import type { VisibilityKeyword } from "@/lib/serp/visibility";
 import { DIMENSION_LABELS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
 import { recordAnthropicCall } from "@/lib/usage/record";
@@ -61,6 +63,13 @@ export async function POST(req: NextRequest, { params }: Params) {
     const body = await req.json().catch(() => ({}));
     const dimension = body?.dimension as ScoreDimension | undefined;
     const refresh = body?.refresh === true;
+    // Checked visibility targets (keywords only) — validated server-side
+    // against the stored SERP snapshot before they reach the search brief.
+    const requestedVisTargets: string[] = Array.isArray(body?.visibilityTargets)
+      ? (body.visibilityTargets as unknown[])
+          .filter((t): t is string => typeof t === "string")
+          .slice(0, 12)
+      : [];
 
     if (!dimension || !DIRECTIVES[dimension]) {
       return NextResponse.json(
@@ -103,12 +112,25 @@ export async function POST(req: NextRequest, { params }: Params) {
     // the SPECIFIC gaps it named (e.g. "what happens if denied"), not just
     // generic topic material. Closing named gaps is what moves the score.
     const findings = await loadDimensionFindings(params.pageId, dimension);
+    const visTargets = await resolveVisibilityTargets(
+      page.url,
+      requestedVisTargets
+    ).catch(() => [] as VisibilityKeyword[]);
     const findingsBlock = findings.rationale || findings.recommendations.length
       ? `## What the audit found on ${DIMENSION_LABELS[dimension]} for THIS page
 ${findings.rationale ? `Auditor rationale: ${findings.rationale}` : ""}
 ${findings.recommendations.map((r) => `Recommendation [${r.priority}]: ${r.suggestion}`).join("\n")}
 
 The gaps named above are your PRIMARY search targets — turn each named missing scenario/topic into its own search (e.g. if the auditor says the page misses "what happens if denied", search for exactly that). Only after covering the named gaps, add other high-value items.`
+      : "";
+
+    // Verified search-visibility targets ride along as additional NAMED
+    // search targets (real stored Google queries — the page ranks for each
+    // but isn't cited in its AI Overview).
+    const visTargetsBlock = visTargets.length
+      ? `## Verified search-visibility targets for THIS page (real Google SERP data)
+The page ranks for these queries but is NOT cited in the AI Overview shown for them. Treat each as a primary search target alongside the audit's named gaps:
+${visTargets.map((t) => `- "${t.keyword}" (${t.volume.toLocaleString()}/mo · position #${t.position})`).join("\n")}`
       : "";
 
     const userMessage = `${DIRECTIVES[dimension]}
@@ -122,6 +144,8 @@ ${headingList || "(none)"}
 Opening content: ${page.bodyText.slice(0, 600)}
 
 ${findingsBlock}
+
+${visTargetsBlock}
 
 ## Your task
 1. Derive the page's core topic from the details above.
