@@ -17,9 +17,12 @@ import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
 import EditAuditSourceButton from "@/components/EditAuditSourceButton";
 import SearchVisibilityCard from "@/components/SearchVisibilityCard";
+import PromptSetCard from "@/components/PromptSetCard";
 import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
+import { getPromptRows, getLastRunSummary } from "@/lib/db/prompts";
 import { serpConfigured } from "@/lib/serp/semrush";
 import { dfsConfigured } from "@/lib/serp/dataforseo";
+import { dfsLlmConfigured } from "@/lib/serp/llm";
 
 export const revalidate = 0;
 
@@ -207,6 +210,10 @@ export default async function ProjectHubPage({
     serpRollup = await getSerpRollup(serpJobId).catch(() => null);
     serpSummaries = await getSerpPageSummaries(serpJobId).catch(() => undefined);
   }
+
+  // ── LLM Prompt Set (Phase 2) — prompts + latest per-engine checks ──
+  const promptRows = await getPromptRows(params.id).catch(() => []);
+  const promptLastRun = await getLastRunSummary(params.id).catch(() => null);
 
   // ── Previous-run averages per site (for the matrix ▲/▼ tickers) ──
   // history is ordered ASC; the second-to-last point per site is "last run".
@@ -430,6 +437,15 @@ export default async function ProjectHubPage({
           configured={serpEnabled}
         />
       )}
+
+      {/* ── LLM Prompt Set (per-engine citation & brand checks) ── */}
+      <PromptSetCard
+        projectId={params.id}
+        initialPrompts={promptRows}
+        lastRun={promptLastRun}
+        pageUrls={clientScores.map((s) => s.url)}
+        configured={dfsLlmConfigured()}
+      />
 
       {/* ── Score trend chart ──────────────────────────────── */}
       {project.history.length > 1 && (
