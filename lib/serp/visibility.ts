@@ -12,6 +12,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import { ensureSerpSchema } from "@/lib/db/serp";
+import { getPromptRowsForUrl } from "@/lib/db/prompts";
 
 function db() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL not set");
@@ -152,4 +153,52 @@ export async function resolveVisibilityTargets(
     pool.push(vis.headTerm);
   }
   return pool.filter((k) => wanted.has(k.keyword.toLowerCase())).slice(0, 8);
+}
+
+// ── Combined SERP + LLM-prompt target resolution ─────────────
+
+export interface ResolvedTargets {
+  /** Real stored ranked-keyword targets (head term / uncited-AIO gaps). */
+  serp: VisibilityKeyword[];
+  /**
+   * Real stored LLM prompts matched to this URL whose latest checks show a
+   * citation gap (no engine cites the page). Text only — prompts carry no
+   * volume figures by design.
+   */
+  prompts: string[];
+}
+
+/**
+ * Server-side validation for ALL target wiring: whatever a client checked,
+ * only strings that exist as REAL stored targets for this URL survive —
+ * either a ranked-keyword target or a prompt from the project's Prompt Set.
+ */
+export async function resolveAllTargets(
+  pageUrl: string,
+  projectId: string | null,
+  requested: string[]
+): Promise<ResolvedTargets> {
+  if (requested.length === 0) return { serp: [], prompts: [] };
+  const wanted = new Set(requested.map((s) => s.trim().toLowerCase()).filter(Boolean));
+
+  const serp = await resolveVisibilityTargets(pageUrl, requested).catch(
+    () => [] as VisibilityKeyword[]
+  );
+
+  let prompts: string[] = [];
+  try {
+    const rows = await getPromptRowsForUrl(projectId, pageUrl);
+    prompts = rows
+      .filter((r) => {
+        const checks = Object.values(r.checks);
+        const cited = checks.some((c) => c && c.status === "ok" && c.cited);
+        return !cited; // citation gap (or not yet checked) → valid target
+      })
+      .map((r) => r.prompt)
+      .filter((p) => wanted.has(p.trim().toLowerCase()))
+      .slice(0, 6);
+  } catch {
+    prompts = [];
+  }
+  return { serp, prompts };
 }
