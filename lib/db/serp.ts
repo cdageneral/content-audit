@@ -111,6 +111,13 @@ export function ensureSerpSchema(): Promise<void> {
       await sql`
         CREATE INDEX IF NOT EXISTS idx_serp_occupants_snapshot ON serp_occupants(snapshot_id)
       `;
+      // Volume-source marker (2026-07-25): TRUE = keyword volumes were
+      // replaced with Semrush per-keyword numbers (Google Ads groups close
+      // variants, inflating every variant to the cluster total). Old
+      // snapshots stay FALSE so the monthly cache won't pin grouped volumes.
+      await sql`
+        ALTER TABLE serp_snapshots ADD COLUMN IF NOT EXISTS volumes_semrush BOOLEAN NOT NULL DEFAULT FALSE
+      `;
     })();
   }
   return serpSchemaReady;
@@ -138,6 +145,8 @@ export interface SnapshotInput {
   unitsSpent: number;
   costUsd?: number;
   reusedFrom?: string | null;
+  /** TRUE when keyword volumes are Semrush per-keyword numbers. */
+  volumesSemrush?: boolean;
   keywords: (SerpKeywordRow & { branded: boolean })[];
   questions: (SerpQuestionRow & { covered: boolean; sourceUrl?: string; sourceDomain?: string })[];
   occupants?: OccupantInput[];
@@ -163,11 +172,12 @@ export async function insertSnapshot(input: SnapshotInput): Promise<string> {
 
   const snap = await sql`
     INSERT INTO serp_snapshots
-      (project_id, job_id, page_id, page_url, database, primary_keyword, keyword_count, units_spent, cost_usd, reused_from)
+      (project_id, job_id, page_id, page_url, database, primary_keyword, keyword_count, units_spent, cost_usd, reused_from, volumes_semrush)
     VALUES
       (${input.projectId}, ${input.jobId}, ${input.pageId}, ${input.pageUrl},
        ${input.database}, ${input.primaryKeyword}, ${input.keywords.length},
-       ${input.unitsSpent}, ${input.costUsd ?? 0}, ${input.reusedFrom ?? null})
+       ${input.unitsSpent}, ${input.costUsd ?? 0}, ${input.reusedFrom ?? null},
+       ${input.volumesSemrush ?? false})
     RETURNING id
   `;
   const snapshotId = snap[0].id as string;
@@ -203,6 +213,7 @@ export async function insertSnapshot(input: SnapshotInput): Promise<string> {
 export interface CachedSnapshot {
   id: string;
   primaryKeyword: string | null;
+  volumesSemrush: boolean;
   keywords: (SerpKeywordRow & { branded: boolean })[];
   questions: (SerpQuestionRow & { covered: boolean; sourceUrl?: string; sourceDomain?: string })[];
   occupants: OccupantInput[];
@@ -219,10 +230,14 @@ export async function findMonthlySnapshot(
   // is either a fetch bug (e.g. the pre-variant-retry URL-mismatch era) or a
   // page that ranks for nothing — both are worth re-checking rather than
   // pinning a zero for the rest of the month (an empty Labs call is cheap).
+  // volumes_semrush = TRUE required: snapshots from the Google-Ads-grouped
+  // era must not be pinned for the rest of the month — one fresh fetch
+  // replaces them with per-keyword volumes, then caching resumes.
   const snaps = await sql`
-    SELECT s.id, s.primary_keyword FROM serp_snapshots s
+    SELECT s.id, s.primary_keyword, s.volumes_semrush FROM serp_snapshots s
     WHERE s.page_url = ${pageUrl} AND s.database = ${database}
       AND date_trunc('month', s.fetched_at) = date_trunc('month', NOW())
+      AND s.volumes_semrush = TRUE
       AND EXISTS (SELECT 1 FROM serp_keywords k WHERE k.snapshot_id = s.id)
     ORDER BY s.fetched_at DESC LIMIT 1
   `;
@@ -236,6 +251,7 @@ export async function findMonthlySnapshot(
   return {
     id,
     primaryKeyword: (snaps[0].primary_keyword as string) ?? null,
+    volumesSemrush: (snaps[0].volumes_semrush as boolean) ?? false,
     keywords: kws.map((k) => ({
       keyword: k.keyword as string,
       position: k.position as number,
