@@ -23,6 +23,10 @@ import type {
   ScoreDimension,
   PageMetadata,
 } from "@/lib/types";
+// Type-only imports — erased at compile time, so no server code (neon) ever
+// reaches the client bundle.
+import type { PageVisibility, VisibilityKeyword } from "@/lib/serp/visibility";
+import type { TargetCoverage } from "@/lib/db/drafts";
 
 // ── Serialized (client-safe) shapes passed from the server page ──
 
@@ -61,6 +65,8 @@ export interface WorkbenchSimulation {
   modelVersion: string;
   promptVersion: string;
   reused: boolean;
+  /** Per-target alignment verdicts (null = simulated without targets). */
+  coverage?: TargetCoverage[] | null;
   createdAt: string; // ISO
 }
 
@@ -81,6 +87,8 @@ export interface WorkbenchProps {
   };
   drafts: WorkbenchDraft[];
   simulations: WorkbenchSimulation[]; // latest per draft
+  /** Stored SERP visibility for this URL (null = no snapshot yet). */
+  visibility: PageVisibility | null;
   promptVersion: string;
   scoringModel: string;
 }
@@ -177,6 +185,31 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   const [research, setResearch] = useState<Partial<Record<ScoreDimension, ResearchState>>>({});
   const [checkedSug, setCheckedSug] = useState<Record<string, boolean>>({});
 
+  // ── Optimization targets (verified search-visibility data) ──
+  // One deduped list: head term first, then every open AIO gap (page ranks,
+  // AI Overview shown, page not cited). All checked by default; checked
+  // targets feed Rewrite, Research, and Simulate coverage.
+  const targetList = useMemo<VisibilityKeyword[]>(() => {
+    const vis = props.visibility;
+    if (!vis) return [];
+    const list: VisibilityKeyword[] = [];
+    if (vis.headTerm) list.push(vis.headTerm);
+    for (const g of vis.gaps) {
+      if (!list.some((k) => k.keyword === g.keyword)) list.push(g);
+    }
+    return list.slice(0, 8);
+  }, [props.visibility]);
+  const [checkedTargets, setCheckedTargets] = useState<Record<string, boolean>>(() => {
+    const init: Record<string, boolean> = {};
+    for (const t of targetList) init[t.keyword] = true;
+    return init;
+  });
+  const activeTargets = useMemo(
+    () => targetList.filter((t) => checkedTargets[t.keyword]).map((t) => t.keyword),
+    [targetList, checkedTargets]
+  );
+  const [visOpen, setVisOpen] = useState(false);
+
   const activeSim = useMemo(() => {
     if (!activeDraftId) return null;
     const found = sims.filter((s) => s.draftId === activeDraftId);
@@ -234,7 +267,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
       const res = await fetch(`/api/optimize/${pageId}/simulate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ draftId }),
+        body: JSON.stringify({ draftId, targets: activeTargets }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
@@ -256,6 +289,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           targetDimensions: dims,
+          visibilityTargets: activeTargets,
           title: editor.title,
           metaDescription: editor.metaDescription,
           bodyMd: editor.bodyMd,
@@ -278,7 +312,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
       const res = await fetch(`/api/optimize/${pageId}/research`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dimension: dim, refresh }),
+        body: JSON.stringify({ dimension: dim, refresh, visibilityTargets: activeTargets }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
@@ -525,6 +559,14 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
           </div>
         </div>
       )}
+
+      {/* Search & AI Visibility — verified SERP data for this URL (stored
+          snapshot; zero provider calls on page load) */}
+      <VisibilityStrip
+        visibility={props.visibility}
+        open={visOpen}
+        onToggle={() => setVisOpen((o) => !o)}
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.35fr,1fr] gap-5 items-start">
         {/* ── LEFT: editor ── */}
@@ -812,7 +854,50 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                   );
                 })}
               </div>
+              {activeSim.coverage && activeSim.coverage.length > 0 && (
+                <div className="px-4 pb-3 border-t border-indigo-100 pt-3">
+                  <p className="text-[10.5px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">
+                    Target coverage —{" "}
+                    {activeSim.coverage.filter((c) => c.status === "covered").length}/
+                    {activeSim.coverage.length} covered
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {activeSim.coverage.map((c, i) => (
+                      <span
+                        key={i}
+                        title={c.note}
+                        className={`rounded-md border px-2 py-0.5 text-[10.5px] font-semibold ${
+                          c.status === "covered"
+                            ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                            : c.status === "partial"
+                            ? "border-amber-200 bg-amber-50 text-amber-800"
+                            : "border-red-200 bg-red-50 text-red-600"
+                        }`}
+                      >
+                        {c.status === "covered" ? "✓" : c.status === "partial" ? "~" : "✗"} {c.target}
+                      </span>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1.5">
+                    Coverage = does the draft substantively address each target (deterministic content
+                    check). It never predicts rankings or AI citations — those are measured after
+                    publishing, at the next audit run.
+                  </p>
+                </div>
+              )}
             </div>
+          )}
+
+          {/* Optimization Targets — checked targets feed Rewrite, Research,
+              and Simulate coverage (merged server-side with the dimension
+              findings into one brief; nothing is double-counted). */}
+          {targetList.length > 0 && (
+            <TargetsCard
+              targets={targetList}
+              headTermKeyword={props.visibility?.headTerm?.keyword ?? null}
+              checked={checkedTargets}
+              onToggle={(kw, on) => setCheckedTargets((c) => ({ ...c, [kw]: on }))}
+            />
           )}
 
           <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -1011,6 +1096,8 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
             >
               {busy === "simulate" ? (
                 <Working label="Simulating…" secs={busySecs} />
+              ) : activeTargets.length > 0 ? (
+                `▶ Simulate Score + Coverage (${activeTargets.length} targets)`
               ) : (
                 "▶ Simulate Score"
               )}
@@ -1087,6 +1174,223 @@ function Working({ label, secs }: { label: string; secs: number }) {
       <Spinner />
       {label} {secs}s
     </span>
+  );
+}
+
+// ── Search & AI Visibility strip ─────────────────────────────
+//
+// Verified data only: everything shown was captured from a live Google SERP
+// at the stated time (stored serp_* snapshot). No modeled figures — LLM
+// prompt-volume estimates were explicitly excluded by design.
+
+function PosDelta({ k }: { k: VisibilityKeyword }) {
+  if (k.prevPosition == null || k.prevPosition === k.position) return null;
+  const improved = k.prevPosition - k.position; // positions count down = up the page
+  return (
+    <span
+      className={`ml-1 text-[10px] font-bold ${improved > 0 ? "text-emerald-600" : "text-red-500"}`}
+      title={`was #${k.prevPosition} in the prior snapshot`}
+    >
+      {improved > 0 ? `▲${improved}` : `▼${-improved}`}
+    </span>
+  );
+}
+
+function AioPill({ k }: { k: VisibilityKeyword }) {
+  if (!k.aioTriggered) {
+    return <span className="rounded-full bg-slate-100 text-slate-400 px-2 py-0.5 text-[10px] font-semibold">no AIO</span>;
+  }
+  if (k.aioCited) {
+    return <span className="rounded-full bg-emerald-50 border border-emerald-200 text-emerald-700 px-2 py-0.5 text-[10px] font-bold">✓ cited</span>;
+  }
+  return <span className="rounded-full bg-red-50 border border-red-200 text-red-600 px-2 py-0.5 text-[10px] font-bold">AIO · not cited</span>;
+}
+
+function VisibilityStrip({
+  visibility,
+  open,
+  onToggle,
+}: {
+  visibility: PageVisibility | null;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  if (!visibility) {
+    return (
+      <div className="rounded-xl border border-slate-200 bg-white px-5 py-3 flex items-center gap-3 flex-wrap">
+        <h3 className="text-sm font-semibold text-slate-700">Search &amp; AI Visibility</h3>
+        <p className="text-xs" style={{ color: "var(--text-3)" }}>
+          No SERP data stored for this URL yet — run an audit (or &ldquo;Refresh SERP data&rdquo; on the
+          project page) with the SERP provider configured to populate the head term, rankings, and
+          AI Overview citation status.
+        </p>
+      </div>
+    );
+  }
+  const v = visibility;
+  const head = v.headTerm;
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-white overflow-hidden">
+      <div className="px-5 py-3 flex items-center gap-x-6 gap-y-2 flex-wrap bg-gradient-to-b from-indigo-50/60 to-white">
+        <h3 className="text-sm font-semibold text-slate-700">Search &amp; AI Visibility</h3>
+        {head ? (
+          <>
+            <div className="min-w-0">
+              <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>
+                Head term{head.branded ? " (branded)" : ""}
+              </span>
+              <span className="text-sm font-bold truncate" style={{ color: "var(--text-1)" }}>{head.keyword}</span>
+            </div>
+            <div>
+              <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>Volume</span>
+              <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
+                {head.volume.toLocaleString()}<span className="text-[10px] font-semibold text-slate-400">/mo</span>
+              </span>
+            </div>
+            <div>
+              <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>Position</span>
+              <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
+                #{head.position}
+                <PosDelta k={head} />
+              </span>
+            </div>
+            <div>
+              <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>AI Overviews</span>
+              <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
+                cited {v.aioCited}<span className="text-slate-400 font-semibold"> of {v.aioQueries}</span>
+              </span>
+            </div>
+            <div>
+              <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>PAA owned</span>
+              <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
+                {v.paaOwned}<span className="text-slate-400 font-semibold"> of {v.paaBoxes}</span>
+              </span>
+            </div>
+          </>
+        ) : (
+          <p className="text-xs" style={{ color: "var(--text-3)" }}>
+            Snapshot exists but holds no ranked keywords for this URL.
+          </p>
+        )}
+        <button
+          onClick={onToggle}
+          className="ml-auto text-[11px] font-semibold text-indigo-600 hover:text-indigo-500"
+        >
+          {open ? "Hide details ▴" : "Details ▾"}
+        </button>
+      </div>
+      {open && (
+        <div className="border-t border-slate-100">
+          <div className="px-5 py-3 overflow-x-auto">
+            <table className="w-full text-[11.5px]">
+              <thead>
+                <tr className="text-left text-[9.5px] uppercase tracking-wide text-slate-400">
+                  <th className="py-1 pr-3 font-bold">Ranked keyword</th>
+                  <th className="py-1 pr-3 font-bold text-right">Vol/mo</th>
+                  <th className="py-1 pr-3 font-bold text-right">Pos</th>
+                  <th className="py-1 pr-3 font-bold">AI Overview</th>
+                  <th className="py-1 font-bold">PAA</th>
+                </tr>
+              </thead>
+              <tbody>
+                {v.keywords.map((k) => (
+                  <tr key={k.keyword} className="border-t border-slate-100">
+                    <td className="py-1.5 pr-3 font-semibold text-slate-700">
+                      {k.keyword}
+                      {k.branded && <span className="ml-1.5 text-[9px] text-slate-400 font-bold uppercase">branded</span>}
+                    </td>
+                    <td className="py-1.5 pr-3 text-right font-mono text-slate-600">{k.volume.toLocaleString()}</td>
+                    <td className="py-1.5 pr-3 text-right font-mono text-slate-600">
+                      #{k.position}
+                      <PosDelta k={k} />
+                    </td>
+                    <td className="py-1.5 pr-3"><AioPill k={k} /></td>
+                    <td className="py-1.5 text-slate-500">
+                      {k.paaPresent ? (k.paaOwned ? "✓ owned" : "present") : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="px-5 py-2.5 border-t border-slate-100 bg-slate-50/60">
+            <p className="text-[10.5px] font-bold uppercase tracking-wide text-slate-500 mb-1">LLM Prompt Set</p>
+            <p className="text-[11px]" style={{ color: "var(--text-3)" }}>
+              No prompt checks yet — LLM prompt tracking (ChatGPT / Perplexity / Gemini citation
+              &amp; brand-mention checks) is not active. Prompts matched to this URL will appear
+              here once the tracking pipeline is live. Nothing shown here is ever estimated.
+            </p>
+          </div>
+          <div className="px-5 py-2 border-t border-slate-100 text-[10px]" style={{ color: "var(--text-3)" }}>
+            Source: live Google SERP snapshot ({v.database}) captured {v.fetchedAt.slice(0, 10)}
+            {v.prevFetchedAt ? ` · deltas vs ${v.prevFetchedAt.slice(0, 10)}` : ""} · verified data
+            only — no modeled figures.
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Optimization Targets card ────────────────────────────────
+
+function TargetsCard({
+  targets,
+  headTermKeyword,
+  checked,
+  onToggle,
+}: {
+  targets: VisibilityKeyword[];
+  headTermKeyword: string | null;
+  checked: Record<string, boolean>;
+  onToggle: (keyword: string, on: boolean) => void;
+}) {
+  const activeCount = targets.filter((t) => checked[t.keyword]).length;
+  return (
+    <div className="rounded-xl border border-indigo-200 bg-white overflow-hidden">
+      <div className="px-4 py-3 border-b border-indigo-100 bg-gradient-to-b from-indigo-50/60 to-white">
+        <h3 className="text-sm font-semibold text-slate-700">Optimization Targets</h3>
+        <p className="text-[10.5px] mt-0.5" style={{ color: "var(--text-3)" }}>
+          Verified search queries for this URL. Checked targets feed AI Rewrite, Research, and
+          Simulate coverage — merged with the audit&apos;s dimension findings into one brief.
+        </p>
+      </div>
+      <div>
+        {targets.map((t) => (
+          <label
+            key={t.keyword}
+            className="flex items-start gap-2.5 px-4 py-2.5 border-b border-slate-100 last:border-b-0 cursor-pointer hover:bg-slate-50 transition-colors"
+          >
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={checked[t.keyword] === true}
+              onChange={(e) => onToggle(t.keyword, e.target.checked)}
+            />
+            <span className="min-w-0 flex-1">
+              <span className="block text-xs font-semibold text-slate-800">{t.keyword}</span>
+              <span className="flex items-center gap-2 mt-0.5 text-[10.5px] text-slate-500 flex-wrap">
+                {t.keyword === headTermKeyword && (
+                  <span className="rounded bg-indigo-50 border border-indigo-200 text-indigo-700 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide">
+                    Head term
+                  </span>
+                )}
+                <span className="font-mono">{t.volume.toLocaleString()}/mo</span>
+                <span className="font-mono">
+                  #{t.position}
+                  <PosDelta k={t} />
+                </span>
+                <AioPill k={t} />
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+      <div className="px-4 py-2 border-t border-slate-100 bg-slate-50/60 text-[10px]" style={{ color: "var(--text-3)" }}>
+        {activeCount} of {targets.length} targets active · named dimension gaps are always included
+        automatically — nothing is double-counted.
+      </div>
+    </div>
   );
 }
 
