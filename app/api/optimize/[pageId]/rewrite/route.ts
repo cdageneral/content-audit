@@ -15,8 +15,8 @@ import Anthropic from "@anthropic-ai/sdk";
 import { neon } from "@neondatabase/serverless";
 import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
-import { resolveVisibilityTargets } from "@/lib/serp/visibility";
-import type { VisibilityKeyword } from "@/lib/serp/visibility";
+import { resolveAllTargets } from "@/lib/serp/visibility";
+import type { ResolvedTargets, VisibilityKeyword } from "@/lib/serp/visibility";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
 import { recordAnthropicCall } from "@/lib/usage/record";
@@ -83,10 +83,11 @@ export async function POST(req: NextRequest, { params }: Params) {
     // the model optimizes against the authoritative stored audit — not
     // whatever a client chose to send).
     const auditContext = await loadAuditContext(params.pageId, targets);
-    const visTargets = await resolveVisibilityTargets(
+    const visTargets = await resolveAllTargets(
       bundle.page.url,
+      bundle.projectId,
       requestedVisTargets
-    ).catch(() => [] as VisibilityKeyword[]);
+    ).catch(() => ({ serp: [], prompts: [] } as ResolvedTargets));
 
     const prompt = buildRewritePrompt(
       bundle.page.url,
@@ -231,7 +232,7 @@ function buildRewritePrompt(
   bodyMd: string,
   targets: ScoreDimension[],
   ctx: AuditContext,
-  visTargets: VisibilityKeyword[] = []
+  visTargets: ResolvedTargets = { serp: [], prompts: [] }
 ): string {
   const targetBlocks = targets
     .map((dim) => {
@@ -254,12 +255,13 @@ function buildRewritePrompt(
   // for where the AI Overview does not currently cite it (stored SERP data —
   // never modeled). Kept as a separate brief section so the model treats them
   // as named coverage targets alongside the dimension findings, in ONE brief.
-  const visBlock = visTargets.length
+  const serpTargets: VisibilityKeyword[] = visTargets.serp;
+  const visBlock = serpTargets.length
     ? `\n## Verified search-visibility targets (real Google SERP data for this URL)
 
 These queries were captured from live Google SERPs. The page ranks for each, but the AI Overview shown for it does NOT cite this page:
 
-${visTargets
+${serpTargets
         .map(
           (t) =>
             `- "${t.keyword}" (${t.volume.toLocaleString()}/mo · current position #${t.position}${t.aioTriggered ? " · AI Overview shown, this page not cited" : ""})`
@@ -267,6 +269,16 @@ ${visTargets
         .join("\n")}
 
 For each target query, make sure the rewrite contains a clear, self-contained, quotable passage that directly and completely answers it (a heading matching the query's intent plus a direct answer in the first sentence works well). Draw only on facts already in the content — where real data is needed, use an [ADD: …] placeholder per rule 1.\n`
+    : "";
+
+  const promptBlock = visTargets.prompts.length
+    ? `\n## LLM prompt targets (verified checks against ChatGPT/Perplexity/Gemini/Claude)
+
+Buyer questions people ask AI assistants where the assistant's answer does NOT currently cite this page:
+
+${visTargets.prompts.map((p) => `- "${p}"`).join("\n")}
+
+For each prompt, the rewrite should contain a self-contained passage an assistant could quote as the direct answer — specific, complete, and attributable. Same rule 1 applies: no invented facts.\n`
     : "";
 
   return `## The audit's scoring rubric (this is exactly how the rewritten page will be graded)
@@ -280,7 +292,7 @@ ${targetBlocks || "(no stored findings — improve against the rubric definition
 ## Stored recommendations for these dimensions
 
 ${recs || "(none)"}
-${visBlock}
+${visBlock}${promptBlock}
 ## The page
 
 URL: ${url}
