@@ -115,6 +115,28 @@ export async function enqueueSerpBatch(msg: SerpBatchMessage): Promise<void> {
   await recordPublish("queue_serp_batch", msg.jobId ?? null);
 }
 
+// ── Dispatch an LLM prompt-check batch ───────────────────────
+
+export interface PromptBatchMessage {
+  projectId: string;
+  runId: string;
+  promptIds: string[];
+  engines: string[];
+}
+
+export async function enqueuePromptBatch(msg: PromptBatchMessage): Promise<void> {
+  const client = getClient();
+  const endpoint = `${getBaseUrl()}/api/webhook/qstash`;
+
+  await client.publishJSON({
+    url: endpoint,
+    body: { type: "prompt_batch", ...msg },
+    retries: 2,
+    delay: 0,
+  });
+  await recordPublish("queue_prompt_batch", null);
+}
+
 // ── Dispatch a classification-only batch (backfill) ───────────
 
 export async function enqueueClassifyBatch(msg: ClassifyBatchMessage): Promise<void> {
