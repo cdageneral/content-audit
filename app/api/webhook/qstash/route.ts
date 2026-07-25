@@ -36,6 +36,16 @@ import {
 } from "@/lib/serp/dataforseo";
 import { getSerpScoringContext } from "@/lib/serp/context";
 import { dispatchSerpBatches } from "@/lib/serp/dispatch";
+import { runLlmPrompt } from "@/lib/serp/llm";
+import {
+  getPromptsByIds,
+  insertPromptCheck,
+  urlKey as promptUrlKey,
+} from "@/lib/db/prompts";
+import type { PromptEngine, PromptCitation } from "@/lib/db/prompts";
+import { PROMPT_ENGINES } from "@/lib/db/prompts";
+import { getProject } from "@/lib/db/projects";
+import type { PromptBatchMessage } from "@/lib/queue/qstash";
 import { recordApiCall } from "@/lib/usage/record";
 import { neon } from "@neondatabase/serverless";
 import type {
@@ -149,6 +159,8 @@ export async function POST(req: NextRequest) {
       await handleClassifyBatch(msg as unknown as ClassifyBatchMessage & { type: string });
     } else if (msg.type === "serp_batch") {
       await handleSerpBatch(msg as unknown as SerpBatchMessage & { type: string });
+    } else if (msg.type === "prompt_batch") {
+      await handlePromptBatch(msg as unknown as PromptBatchMessage & { type: string });
     } else if (msg.type === "test") {
       console.log("[qstash] Test message received — OK");
     } else {
@@ -777,5 +789,122 @@ async function handleSerpBatch(
 
   console.log(
     `[serp] Job ${jobId}: ${done} fetched, ${cached} cached, ${skipped} over-budget (units≈${unitsSpent}).`
+  );
+}
+
+// ── LLM prompt-check batch handler ────────────────────────────
+//
+// One message = one or more prompts; each prompt is checked against every
+// requested engine IN PARALLEL (live calls can take up to ~2 min each — the
+// per-prompt wall time is the slowest engine, not the sum). Every row written
+// comes from a real provider response or a real error; costs are what
+// DataForSEO actually charged (recorded per call in the usage ledger).
+
+async function handlePromptBatch(
+  msg: PromptBatchMessage & { type: string }
+): Promise<void> {
+  const { projectId, runId, promptIds } = msg;
+  const engines = (msg.engines ?? []).filter((e): e is PromptEngine =>
+    (PROMPT_ENGINES as readonly string[]).includes(e)
+  );
+  if (engines.length === 0) return;
+
+  const [project, prompts] = await Promise.all([
+    getProject(projectId),
+    getPromptsByIds(projectId, promptIds),
+  ]);
+  if (!project || prompts.length === 0) return;
+
+  // Client identity for cited/brand detection — from the project record only.
+  let clientHost = "";
+  try {
+    clientHost = new URL(project.websiteUrl).hostname.replace(/^www\./, "").toLowerCase();
+  } catch {
+    /* keep empty — cited stays false rather than guessing */
+  }
+  const domainCore = clientHost.split(".")[0] ?? "";
+  const brandTerms = [project.clientName?.trim(), domainCore]
+    .filter((t): t is string => !!t && t.length >= 3);
+
+  for (const prompt of prompts) {
+    await Promise.all(
+      engines.map(async (engine) => {
+        try {
+          const res = await runLlmPrompt(engine, prompt.prompt);
+
+          // Cited = the engine's answer carries a citation link on the
+          // client's host (urlKey-insensitive).
+          let cited = false;
+          let citedUrl: string | null = null;
+          for (const c of res.citations) {
+            try {
+              const host = new URL(c.url).hostname.replace(/^www\./, "").toLowerCase();
+              if (clientHost && (host === clientHost || host.endsWith(`.${clientHost}`))) {
+                cited = true;
+                if (!citedUrl) citedUrl = c.url;
+              }
+            } catch {
+              /* unparsable citation URL — ignore */
+            }
+          }
+          // Brand mention = client name (or domain core) appears in the
+          // answer text. Simple case-insensitive containment — no inference.
+          const answerLower = res.answer.toLowerCase();
+          const brandMentioned = brandTerms.some((t) =>
+            answerLower.includes(t.toLowerCase())
+          );
+
+          await insertPromptCheck({
+            projectId,
+            promptId: prompt.id,
+            runId,
+            engine,
+            modelName: res.modelName,
+            status: "ok",
+            cited,
+            citedUrl,
+            brandMentioned,
+            citations: res.citations.slice(0, 20) as PromptCitation[],
+            answerExcerpt: res.answer.slice(0, 600),
+            webSearch: res.webSearchUsed,
+            costUsd: res.costUsd,
+            error: null,
+          });
+          await recordApiCall({
+            provider: "dataforseo",
+            purpose: "llm_prompt",
+            model: `${engine}/${res.modelName}`,
+            costUsd: res.costUsd,
+            projectId,
+            meta: { engine, promptId: prompt.id, runId, cited, brandMentioned },
+          });
+        } catch (err) {
+          const emsg = String((err as Error)?.message ?? err).slice(0, 300);
+          console.error(`[prompts] ${engine} "${prompt.prompt.slice(0, 60)}":`, emsg);
+          await insertPromptCheck({
+            projectId,
+            promptId: prompt.id,
+            runId,
+            engine,
+            modelName: "",
+            status: "error",
+            cited: false,
+            citedUrl: null,
+            brandMentioned: false,
+            citations: [],
+            answerExcerpt: "",
+            webSearch: false,
+            costUsd: null,
+            error: emsg,
+          }).catch(() => undefined);
+        }
+      })
+    );
+  }
+  // promptUrlKey imported for parity with serp handling; matching happens at
+  // read time in lib/db/prompts.getPromptRowsForUrl.
+  void promptUrlKey;
+  console.log(
+    `[prompts] Run ${runId}: checked ${prompts.length} prompt(s) × ${engines.length} engine(s).`
   );
 }
