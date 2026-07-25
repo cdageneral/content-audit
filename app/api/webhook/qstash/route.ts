@@ -23,6 +23,7 @@ import type { SerpBatchMessage } from "@/lib/queue/qstash";
 import {
   serpConfigured,
   fetchUrlKeywords,
+  fetchVolumesSemrush,
   fetchQuestions,
   pickPrimaryKeyword,
   isBrandedKeyword,
@@ -602,6 +603,7 @@ async function handleSerpBatch(
           primaryKeyword: prior.primaryKeyword,
           unitsSpent: 0,
           reusedFrom: prior.id,
+          volumesSemrush: prior.volumesSemrush,
           keywords: prior.keywords,
           questions: prior.questions,
           occupants: prior.occupants,
@@ -614,6 +616,7 @@ async function handleSerpBatch(
       let rows;
       let kwUnits = 0;
       let costUsd = 0;
+      let volumesSemrush = false;
 
       if (useDfs) {
         const res = await fetchUrlKeywordsDfs(page.url, database, SERP_KEYWORDS_PER_URL);
@@ -629,11 +632,51 @@ async function handleSerpBatch(
           pageUrl: page.url,
           meta: { database, rows: res.rows.length },
         });
+        // Volume correction (2026-07-25): Google Ads volumes (DFS Labs
+        // keyword_info.search_volume) group close variants — every variant
+        // inherits the cluster TOTAL (all "cd rates" phrasings showed 165K).
+        // Replace with Semrush per-keyword volumes when the key is
+        // configured; keywords Semrush doesn't know keep the DFS value.
+        // Both sources are real data. A failure here keeps DFS volumes
+        // rather than failing the page.
+        if (serpConfigured() && rows.length > 0) {
+          try {
+            const vres = await fetchVolumesSemrush(
+              rows.map((r) => r.keyword),
+              database
+            );
+            if (vres.volumes.size > 0) {
+              rows = rows.map((r) => ({
+                ...r,
+                volume: vres.volumes.get(r.keyword.trim().toLowerCase()) ?? r.volume,
+              }));
+              rows.sort((a, b) => b.volume - a.volume);
+              volumesSemrush = true;
+            }
+            kwUnits += vres.unitsSpent;
+            unitsSpent += vres.unitsSpent;
+            await recordApiCall({
+              provider: "semrush",
+              purpose: "kw_volumes",
+              costUsd: null,
+              projectId,
+              jobId,
+              pageUrl: page.url,
+              meta: { keywords: rows.length, units_spent: vres.unitsSpent },
+            });
+          } catch (err) {
+            console.error(
+              `[serp] Semrush volume override failed for ${page.url} — keeping DFS volumes:`,
+              err
+            );
+          }
+        }
       } else {
         const res = await fetchUrlKeywords(page.url, database, SERP_KEYWORDS_PER_URL);
         rows = res.rows;
         kwUnits = res.unitsSpent;
         unitsSpent += kwUnits;
+        volumesSemrush = true; // Semrush-primary volumes are per-keyword already
         // Semrush bills in plan-dependent API units — record units, no $ guess.
         await recordApiCall({
           provider: "semrush",
@@ -767,6 +810,7 @@ async function handleSerpBatch(
         primaryKeyword,
         unitsSpent: kwUnits,
         costUsd,
+        volumesSemrush,
         keywords: rows.map((r) => ({
           ...r,
           branded: isBrandedKeyword(r.keyword, clientName),
