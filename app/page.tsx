@@ -45,8 +45,8 @@ export default async function DashboardPage() {
       <div className="px-6 pt-16 pb-10 max-w-6xl mx-auto">
         <div className="anim-fade-up text-center mb-12">
           <img
-            src="/meridian-logo-hero.png"
-            alt="Meridian"
+            src="/prism-optimizer-logo-hero.png"
+            alt="Prism Optimizer"
             className="mx-auto mb-6"
             style={{ height: "180px", width: "auto", maxWidth: "90%" }}
           />
