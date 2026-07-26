@@ -299,16 +299,25 @@ export interface SerpRollup {
   paaOwnedKws: number;
   questionsTotal: number;
   questionsCovered: number;
-  moneyList: {
-    keyword: string;
-    volume: number;
-    position: number;
-    pageUrl: string;
-  }[];
-  citedList: { keyword: string; volume: number; pageUrl: string }[];
+  /**
+   * Keywords whose AI Overview already cites a page of the client's — name
+   * only. No volume figure: see the volume-honesty note on getSerpRollup.
+   */
+  citedList: { keyword: string; pageUrl: string }[];
 }
 
-/** Aggregate the latest client job's snapshots for the hub card. */
+/**
+ * Aggregate the latest client job's snapshots for the hub card.
+ *
+ * Volume honesty (2026-07-26): the hub deliberately carries NO per-keyword
+ * volume numbers. Snapshots taken before the Semrush override (2026-07-25)
+ * store Google-Ads *grouped* volumes, where every close variant inherits the
+ * cluster total — "best savings account high-yield" read 1,000,000 against a
+ * true 20/mo. Those numbers also mis-ordered any "biggest misses" ranking, so
+ * the ranked table was removed rather than shown with a caveat. Volume is
+ * surfaced only in the Optimize workbench, and only when the snapshot is
+ * marked volumes_semrush = TRUE.
+ */
 export async function getSerpRollup(jobId: string): Promise<SerpRollup | null> {
   await ensureSerpSchema();
   const sql = db();
@@ -330,24 +339,15 @@ export async function getSerpRollup(jobId: string): Promise<SerpRollup | null> {
   `;
 
   const nonBranded = kws.filter((k) => !k.branded);
-  const moneyList = nonBranded
-    .filter((k) => k.aio_triggered && !k.aio_cited)
-    .map((k) => ({
-      keyword: k.keyword as string,
-      volume: k.volume as number,
-      position: k.position as number,
-      pageUrl: urlBySnap.get(k.snapshot_id as string) ?? "",
-    }))
-    .sort((a, b) => b.volume - a.volume)
-    .slice(0, 15);
+  // Cited-for list: alphabetical, not volume-ranked — a volume sort would
+  // silently reintroduce the grouped-volume ordering bug.
   const citedList = nonBranded
     .filter((k) => k.aio_cited)
     .map((k) => ({
       keyword: k.keyword as string,
-      volume: k.volume as number,
       pageUrl: urlBySnap.get(k.snapshot_id as string) ?? "",
     }))
-    .sort((a, b) => b.volume - a.volume)
+    .sort((a, b) => a.keyword.localeCompare(b.keyword))
     .slice(0, 15);
 
   return {
@@ -361,7 +361,6 @@ export async function getSerpRollup(jobId: string): Promise<SerpRollup | null> {
     paaOwnedKws: nonBranded.filter((k) => k.paa_owned).length,
     questionsTotal: qs.length,
     questionsCovered: qs.filter((q) => q.covered).length,
-    moneyList,
     citedList,
   };
 }
@@ -370,7 +369,12 @@ export async function getSerpRollup(jobId: string): Promise<SerpRollup | null> {
 
 export interface SerpKeywordDetail {
   keyword: string;
-  volume: number;
+  /**
+   * Monthly search volume, or null when the snapshot's volumes are the
+   * Google-Ads *grouped* figures (volumes_semrush = FALSE). Null renders as
+   * "—" — never as a number we can't stand behind.
+   */
+  volume: number | null;
   position: number;
   aioTriggered: boolean;
   aioCited: boolean;
@@ -407,7 +411,8 @@ export async function getSerpPageSummaries(
   const out: Record<string, SerpPageSummary> = {};
 
   const snaps = await sql`
-    SELECT id, page_url, primary_keyword FROM serp_snapshots WHERE job_id = ${jobId}
+    SELECT id, page_url, primary_keyword, volumes_semrush
+    FROM serp_snapshots WHERE job_id = ${jobId}
   `.catch(() => [] as Record<string, unknown>[]);
   if (snaps.length === 0) return out;
   const snapIds = snaps.map((x) => x.id as string);
@@ -440,6 +445,10 @@ export async function getSerpPageSummaries(
       /* keep empty */
     }
 
+    // Volumes are only trustworthy per-keyword when this snapshot was written
+    // with the Semrush override; grouped-era rows surface as null → "—".
+    const volumesOk = (snap.volumes_semrush as boolean) ?? false;
+
     const rows = kws.filter((k) => k.snapshot_id === snapId);
     const details: SerpKeywordDetail[] = rows.map((k) => {
       const aioOcc = occBySnapKw.get(`${snapId}|${k.keyword}|52`) ?? [];
@@ -456,7 +465,7 @@ export async function getSerpPageSummaries(
       }
       return {
         keyword: k.keyword as string,
-        volume: k.volume as number,
+        volume: volumesOk ? (k.volume as number) : null,
         position: k.position as number,
         aioTriggered: k.aio_triggered as boolean,
         aioCited: k.aio_cited as boolean,
@@ -467,7 +476,13 @@ export async function getSerpPageSummaries(
         siblingCited,
       };
     });
-    details.sort((a, b) => b.volume - a.volume);
+    // Volume desc when volumes are real; alphabetical when they aren't, so a
+    // grouped-volume tie doesn't dictate a bogus priority order.
+    details.sort((a, b) =>
+      volumesOk
+        ? (b.volume ?? 0) - (a.volume ?? 0)
+        : a.keyword.localeCompare(b.keyword)
+    );
 
     const nb = details.filter((d) => !d.branded);
     out[pageUrl] = {
