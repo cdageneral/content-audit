@@ -22,7 +22,13 @@ function db() {
 
 export interface VisibilityKeyword {
   keyword: string;
-  volume: number;
+  /**
+   * Monthly search volume, or null when this snapshot predates the Semrush
+   * per-keyword override (volumes_semrush = FALSE). Google-Ads volumes group
+   * close variants — every variant inherits the cluster total — so those
+   * numbers are not per-keyword facts and are never rendered as such.
+   */
+  volume: number | null;
   position: number;
   aioTriggered: boolean;
   aioCited: boolean;
@@ -40,9 +46,17 @@ export interface PageVisibility {
   database: string;
   /** Fetch time of the prior snapshot the deltas compare against (ISO), if any. */
   prevFetchedAt: string | null;
-  /** Highest-volume non-branded ranked keyword — the page's head term. */
+  /**
+   * FALSE when this snapshot's volumes are the Google-Ads grouped figures. The
+   * UI hides volume entirely in that case and says why.
+   */
+  volumesVerified: boolean;
+  /**
+   * Highest-volume non-branded ranked keyword — the page's head term. Falls
+   * back to best rank when volumes aren't trustworthy.
+   */
   headTerm: VisibilityKeyword | null;
-  /** Ranked keywords, volume desc (top 15). */
+  /** Ranked keywords, volume desc (best rank first when volumes are unverified). */
   keywords: VisibilityKeyword[];
   /** Non-branded keywords whose SERP shows an AI Overview. */
   aioQueries: number;
@@ -71,7 +85,7 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
     const sql = db();
 
     const snaps = await sql`
-      SELECT s.id, s.database, s.fetched_at FROM serp_snapshots s
+      SELECT s.id, s.database, s.fetched_at, s.volumes_semrush FROM serp_snapshots s
       WHERE s.page_url = ${pageUrl}
         AND EXISTS (SELECT 1 FROM serp_keywords k WHERE k.snapshot_id = s.id)
       ORDER BY s.fetched_at DESC
@@ -81,11 +95,15 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
     const latest = snaps[0];
     const prior = snaps.length > 1 ? snaps[1] : null;
 
+    // Grouped-era snapshots (pre-2026-07-25) carry Google Ads cluster totals,
+    // not per-keyword volumes. Suppress the number rather than mislead.
+    const volumesVerified = (latest.volumes_semrush as boolean) ?? false;
+
     const kws = await sql`
       SELECT keyword, position, volume, aio_triggered, aio_cited,
              paa_present, paa_owned, branded
       FROM serp_keywords WHERE snapshot_id = ${latest.id as string}
-      ORDER BY volume DESC, keyword ASC
+      ORDER BY keyword ASC
     `;
 
     const prevPos = new Map<string, number>();
@@ -98,7 +116,7 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
 
     const all: VisibilityKeyword[] = kws.map((k) => ({
       keyword: k.keyword as string,
-      volume: k.volume as number,
+      volume: volumesVerified ? (k.volume as number) : null,
       position: k.position as number,
       aioTriggered: k.aio_triggered as boolean,
       aioCited: k.aio_cited as boolean,
@@ -108,10 +126,19 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
       prevPosition: prevPos.get(k.keyword as string) ?? null,
     }));
 
+    // Volume desc when the volumes are real per-keyword numbers; best organic
+    // rank first when they aren't, so priority order never rests on a
+    // grouped cluster total.
+    all.sort((a, b) =>
+      volumesVerified
+        ? (b.volume ?? 0) - (a.volume ?? 0) || a.keyword.localeCompare(b.keyword)
+        : a.position - b.position || a.keyword.localeCompare(b.keyword)
+    );
+
     const nonBranded = all.filter((k) => !k.branded);
-    // Head term: highest-volume non-branded ranked keyword; if every ranked
-    // keyword is branded, fall back to the top branded one (still real data —
-    // the branded flag stays visible in the UI).
+    // Head term: top non-branded ranked keyword under the sort above; if every
+    // ranked keyword is branded, fall back to the top branded one (still real
+    // data — the branded flag stays visible in the UI).
     const headTerm = nonBranded[0] ?? all[0] ?? null;
     const gaps = nonBranded.filter((k) => k.aioTriggered && !k.aioCited);
 
@@ -119,6 +146,7 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
       fetchedAt: new Date(latest.fetched_at as string).toISOString(),
       database: (latest.database as string) ?? "us",
       prevFetchedAt: prior ? new Date(prior.fetched_at as string).toISOString() : null,
+      volumesVerified,
       headTerm,
       keywords: all.slice(0, MAX_KEYWORDS),
       aioQueries: nonBranded.filter((k) => k.aioTriggered).length,
