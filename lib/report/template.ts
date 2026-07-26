@@ -95,6 +95,23 @@ const DIM_GROUP: Record<ScoreDimension, "quality" | "machine"> = {
   paaCoverage: "quality",
 };
 
+// Display label for a dimension's family. DIM_GROUP stays a two-way split
+// because the narrative logic keys off it; the two Search Visibility
+// dimensions get their own label so the report never calls a SERP
+// measurement "machine usability".
+const DIM_GROUP_LABEL: Record<ScoreDimension, string> = {
+  coreIntent: "content quality",
+  edgeCases: "content quality",
+  impliedQuestions: "content quality",
+  fanOutQueries: "content quality",
+  retrievable: "machine usability",
+  extractable: "machine usability",
+  citable: "machine usability",
+  reusable: "machine usability",
+  aioReadiness: "search visibility",
+  paaCoverage: "search visibility",
+};
+
 const BUCKETS: IntentBucket[] = ["recency", "ranking", "local", "comparison"];
 
 // ── Small helpers ─────────────────────────────────────────────
@@ -450,7 +467,7 @@ export function renderAssessmentHtml(data: ReportData): string {
   const pages: string[] = [];
 
   const footer = (i: number, total: number): string =>
-    `<div class="pfoot"><span><b>C3 Marketing Group</b> · AI Content Readiness Assessment · ${esc(client.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, ""))}</span><span>Confidential · Page ${i} of ${total}</span></div>`;
+    `<div class="pfoot"><span><b>Prism Optimizer</b> is powered by C3 technology · ${esc(client.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, ""))}</span><span>Confidential · Page ${i} of ${total}</span></div>`;
 
   // ═══ COVER ═══
   {
@@ -519,7 +536,7 @@ export function renderAssessmentHtml(data: ReportData): string {
   <div class="cover-body">
     <div class="kicker">Content Readiness Assessment</div>
     <h1>How ready is your content for the <em>AI answer era?</em></h1>
-    <p class="for">An 8-dimension audit of how well <b>${esc(client.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, ""))}</b> performs when AI systems — ChatGPT, Perplexity, Google AI Overviews — retrieve, extract, cite, and reuse your content.${competitors.length ? ` Benchmarked against <b>${competitors.map((c) => esc(c.name)).join("</b> and <b>")}</b>.` : ""}</p>
+    <p class="for">A 10-dimension audit of how well <b>${esc(client.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, ""))}</b> performs when AI systems — ChatGPT, Perplexity, Google AI Overviews — retrieve, extract, cite, and reuse your content.${competitors.length ? ` Benchmarked against <b>${competitors.map((c) => esc(c.name)).join("</b> and <b>")}</b>.` : ""}</p>
     <div class="hero-wrap">
       <div class="dial">
         ${dialSvg(client.overall)}
@@ -550,7 +567,7 @@ export function renderAssessmentHtml(data: ReportData): string {
         ? `<div class="cmark" style="left:calc(${leader.means[d]}% - 1px)"></div>`
         : "";
       return `<div class="dimbar">
-      <div class="top"><span class="nm">${DIM_LABEL[d]}<small>${DIM_GROUP[d] === "quality" ? "content quality" : "machine usability"} · wt ${wpct(d)}</small></span><span class="sc">${v}<small style="color:#898781;font-weight:500"> /100</small></span></div>
+      <div class="top"><span class="nm">${DIM_LABEL[d]}<small>${DIM_GROUP_LABEL[d]} · wt ${wpct(d)}</small></span><span class="sc">${v}<small style="color:#898781;font-weight:500"> /100</small></span></div>
       <div class="track"><div class="fill" style="width:${v}%;background:${col}"></div>${tick}</div>
     </div>`;
     }).join("");
@@ -561,13 +578,13 @@ export function renderAssessmentHtml(data: ReportData): string {
 
     pages.push(`<div class="page">
   <div class="kicker">Section 01 · The Score</div>
-  <h2 class="sec">Your 8-dimension LLM-readiness profile</h2>
-  <p class="sec-sub">Every URL is scored 0–100 on eight dimensions by an AI analyst, then weighted into a page grade. Four dimensions measure <b>content quality</b> (does this page deserve to be the answer?) and four measure <b>machine usability</b> (can an AI system actually use it?).</p>
+  <h2 class="sec">Your 10-dimension LLM-readiness profile</h2>
+  <p class="sec-sub">Every URL is scored 0–100 on ten dimensions by an AI analyst, then weighted into a page grade. Four dimensions measure <b>content quality</b> (does this page deserve to be the answer?), four measure <b>machine usability</b> (can an AI system actually use it?), and two measure <b>search visibility</b> (is it shaped for AI Overviews and People Also Ask?).</p>
   <div class="dim-layout">
     <div class="radar-box">${radarSvg(client, competitors)}<div class="radar-legend">${legend.join("")}</div></div>
     <div class="dimbars">${bars}</div>
   </div>
-  <div class="callout" style="margin-top:22px;"><b>Where to look first:</b> ${DIM_LABEL[weakDims[0]]} (${client.means[weakDims[0]]}) and ${DIM_LABEL[weakDims[1]]} (${client.means[weakDims[1]]}) are your two lowest scores${((w[weakDims[0]] ?? 0) as number) >= 0.15 ? `, and ${DIM_LABEL[weakDims[0]]} carries a ${wpct(weakDims[0])} weight — the maximum` : ""}. ${leader ? `The orange ticks show ${esc(leader.name)}'s average on each dimension${leaderDimLead === 8 ? " — they lead on all eight" : leaderDimLead > 0 ? ` — they lead on ${leaderDimLead} of eight` : ""}.` : ""}</div>
+  <div class="callout" style="margin-top:22px;"><b>Where to look first:</b> ${DIM_LABEL[weakDims[0]]} (${client.means[weakDims[0]]}) and ${DIM_LABEL[weakDims[1]]} (${client.means[weakDims[1]]}) are your two lowest scores${((w[weakDims[0]] ?? 0) as number) >= 0.15 ? `, and ${DIM_LABEL[weakDims[0]]} carries a ${wpct(weakDims[0])} weight — the maximum` : ""}. ${leader ? `The orange ticks show ${esc(leader.name)}'s average on each dimension${leaderDimLead === DIM_ORDER.length ? ` — they lead on all ${DIM_ORDER.length}` : leaderDimLead > 0 ? ` — they lead on ${leaderDimLead} of ${DIM_ORDER.length}` : ""}.` : ""}</div>
   ${aiAccessBox(data.aiAccess, client.url)}
   __FOOT__
 </div>`);
@@ -644,7 +661,7 @@ export function renderAssessmentHtml(data: ReportData): string {
     const eduCard = (d: ScoreDimension, ico: string, note: string): string => {
       const v = client.means[d];
       return `<div class="edu-card">
-      <h4><span class="ico">${ico}</span>${DIM_LABEL[d]} <small style="color:var(--ink-3);font-weight:500">· ${DIM_GROUP[d]}</small></h4>
+      <h4><span class="ico">${ico}</span>${DIM_LABEL[d]} <small style="color:var(--ink-3);font-weight:500">· ${DIM_GROUP_LABEL[d]}</small></h4>
       <p>${EDU_BODY[d]}</p>
       <div class="yours">You: <span class="pill" style="color:${GRADE_COLOR[gradeOf(v)]}">${v}</span> — ${note}</div>
     </div>`;
@@ -666,7 +683,7 @@ export function renderAssessmentHtml(data: ReportData): string {
     <div class="depth-step"><div class="n">STEP 3</div><b>Trust</b>Author, date, sources, and canonical URL are the credibility signals that make a passage safe to cite.</div>
     <div class="depth-step"><div class="n">STEP 4</div><b>Reuse</b>Each section must stand alone — the engine quotes chunks, and “as mentioned above” dies out of context.</div>
   </div>
-  <p class="sec-sub" style="margin-bottom:12px;"><b style="color:var(--ink-1)">Depth separates a page that gets cited from one that gets skipped.</b> Thin “what is X” content loses to content that reads like the work of someone who has done the thing — the eight dimensions below measure that:</p>
+  <p class="sec-sub" style="margin-bottom:12px;"><b style="color:var(--ink-1)">Depth separates a page that gets cited from one that gets skipped.</b> Thin “what is X” content loses to content that reads like the work of someone who has done the thing — the ten dimensions below measure that:</p>
   <div class="edu-grid">
     ${eduCard("coreIntent", "🎯", rank("coreIntent"))}
     ${eduCard("edgeCases", "⚠️", rank("edgeCases"))}
@@ -676,6 +693,8 @@ export function renderAssessmentHtml(data: ReportData): string {
     ${eduCard("extractable", "📦", rank("extractable"))}
     ${eduCard("citable", "🏛️", rank("citable"))}
     ${eduCard("reusable", "🧩", rank("reusable"))}
+    ${eduCard("aioReadiness", "💬", rank("aioReadiness"))}
+    ${eduCard("paaCoverage", "🙋", rank("paaCoverage"))}
   </div>
   __FOOT__
 </div>`);
@@ -819,7 +838,7 @@ export function renderAssessmentHtml(data: ReportData): string {
   </div>
   <div class="method">
     <h4>Methodology &amp; data provenance</h4>
-    <p>${[client, ...competitors].map((s) => `${s.pages.length} ${esc(s.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, ""))} URL${s.pages.length === 1 ? "" : "s"}`).join(", ")} were crawled and scored on ${runDateStr} by Prism Optimizer, C3's AI content readiness engine${data.modelVersion ? ` (scoring model: ${esc(data.modelVersion)}, deterministic configuration${data.jobId ? `; audit job ${esc(data.jobId.slice(0, 8))}` : ""})` : ""}. Each URL is scored 0–100 on eight dimensions by an AI content analyst with page-level evidence retained for every score; dimension scores combine using the weights below into a page score, and letter grades map as A 85–100 · B 70–84 · C 55–69 · D 40–54 · F 0–39. The site score is the average of page scores. Intent-bucket classification follows the four fetch-trigger categories (recency, ranking, local, comparison), judged on body content rather than titles. All figures in this report are read directly from that audit run — none are modeled or projected.</p>
+    <p>${[client, ...competitors].map((s) => `${s.pages.length} ${esc(s.url.replace(/^https?:\/\/(www\.)?/, "").replace(/\/.*$/, ""))} URL${s.pages.length === 1 ? "" : "s"}`).join(", ")} were crawled and scored on ${runDateStr} by Prism Optimizer, C3's AI content readiness engine${data.modelVersion ? ` (scoring model: ${esc(data.modelVersion)}, deterministic configuration${data.jobId ? `; audit job ${esc(data.jobId.slice(0, 8))}` : ""})` : ""}. Each URL is scored 0–100 on ten dimensions by an AI content analyst with page-level evidence retained for every score; dimension scores combine using the weights below into a page score, and letter grades map as A 85–100 · B 70–84 · C 55–69 · D 40–54 · F 0–39. The site score is the average of page scores. Intent-bucket classification follows the four fetch-trigger categories (recency, ranking, local, comparison), judged on body content rather than titles. All figures in this report are read directly from that audit run — none are modeled or projected.</p>
     <table><tr>${DIM_ORDER.map((d) => `<th>${DIM_LABEL[d]}</th>`).join("")}</tr><tr>${DIM_ORDER.map((d) => `<td>${wpct(d)}</td>`).join("")}</tr></table>
     <p style="color:var(--ink-3)">Prepared by C3 Marketing Group · thec3marketinggroup.com · Generated ${data.generatedAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}.</p>
   </div>
