@@ -214,9 +214,10 @@ export interface DraftInput {
 export async function createDraft(input: DraftInput): Promise<PageDraft> {
   await ensureOptimizeSchema();
   const sql = db();
-  // Next version number for this page. The UNIQUE(page_id, version) constraint
-  // makes a concurrent double-save fail loudly instead of silently forking the
-  // version history; the client just retries.
+  // Next version number for this URL within the project (not just this
+  // page_id): re-audits mint new page rows, and versions must keep counting
+  // up rather than restarting at v1. UNIQUE(page_id, version) still guards
+  // concurrent double-saves on the same page.
   const rows = await sql`
     INSERT INTO page_drafts (
       project_id, page_id, job_id, url, version,
@@ -224,7 +225,8 @@ export async function createDraft(input: DraftInput): Promise<PageDraft> {
     )
     VALUES (
       ${input.projectId}, ${input.pageId}, ${input.jobId}, ${input.url},
-      COALESCE((SELECT MAX(version) FROM page_drafts WHERE page_id = ${input.pageId}), 0) + 1,
+      COALESCE((SELECT MAX(version) FROM page_drafts
+                WHERE project_id = ${input.projectId} AND url = ${input.url}), 0) + 1,
       ${input.title}, ${input.metaDescription}, ${input.bodyMd},
       ${JSON.stringify(input.metadata)},
       ${JSON.stringify(input.internalLinks)},
@@ -249,6 +251,61 @@ export async function getDraftsByPage(pageId: string): Promise<PageDraft[]> {
     SELECT * FROM page_drafts WHERE page_id = ${pageId} ORDER BY version DESC
   `;
   return rows.map(rowToDraft);
+}
+
+// ── URL-lineage continuity (re-audit safe) ───────────────────
+//
+// Every audit run mints NEW audit_pages rows (new page ids), but drafts and
+// simulations belong to the URL the user is optimizing — that's why
+// getProjectOptimizeStates is URL-keyed. These helpers make the rest of the
+// optimize flow follow the same rule, so a draft saved before a re-audit
+// stays reachable from the new run's page id.
+
+/** Loose URL identity — protocol/www/trailing-slash/case-insensitive (same as the webhook's urlKey). */
+export function draftUrlKey(u: string): string {
+  return u
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+}
+
+/**
+ * Does this draft belong to this page's lineage? Exact page match, or same
+ * project + same URL (a re-audit minted a new page row for the same page).
+ */
+export function draftMatchesPage(draft: PageDraft, bundle: OptimizePageBundle): boolean {
+  if (draft.pageId === bundle.page.id) return true;
+  if (!bundle.projectId || draft.projectId !== bundle.projectId) return false;
+  return draftUrlKey(draft.url) === draftUrlKey(bundle.page.url);
+}
+
+/** All drafts for a URL within a project (any audit run), newest first. */
+export async function getDraftsByUrl(projectId: string, url: string): Promise<PageDraft[]> {
+  await ensureOptimizeSchema();
+  const sql = db();
+  const rows = await sql`
+    SELECT * FROM page_drafts WHERE project_id = ${projectId} ORDER BY created_at DESC
+  `;
+  const key = draftUrlKey(url);
+  return rows.map(rowToDraft).filter((d) => draftUrlKey(d.url) === key);
+}
+
+/** Latest simulation per draft for a URL within a project (any audit run). */
+export async function getSimulationsByUrl(
+  projectId: string,
+  url: string
+): Promise<DraftSimulation[]> {
+  await ensureOptimizeSchema();
+  const sql = db();
+  const rows = await sql`
+    SELECT DISTINCT ON (draft_id) *
+    FROM draft_simulations
+    WHERE project_id = ${projectId}
+    ORDER BY draft_id, created_at DESC
+  `;
+  const key = draftUrlKey(url);
+  return rows.map(rowToSim).filter((s) => draftUrlKey(s.url) === key);
 }
 
 // ── Simulations ───────────────────────────────────────────────
