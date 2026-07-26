@@ -23,6 +23,7 @@ import {
   getPageForOptimize,
   insertSimulation,
   countRecentSimulations,
+  draftMatchesPage,
 } from "@/lib/db/drafts";
 import type { TargetCoverage } from "@/lib/db/drafts";
 import { draftToCrawledPage } from "@/lib/optimize/transform";
@@ -62,14 +63,17 @@ export async function POST(req: NextRequest, { params }: Params) {
           .slice(0, 12)
       : [];
 
-    const draft = await getDraft(draftId);
-    if (!draft || draft.pageId !== params.pageId) {
-      return NextResponse.json({ error: "Draft not found for this page" }, { status: 404 });
-    }
-
-    const bundle = await getPageForOptimize(params.pageId);
+    const [draft, bundle] = await Promise.all([
+      getDraft(draftId),
+      getPageForOptimize(params.pageId),
+    ]);
     if (!bundle) {
       return NextResponse.json({ error: "Page not found" }, { status: 404 });
+    }
+    // URL-lineage check (re-audit safe): drafts keep their original page id
+    // while every new run mints new page rows for the same URL.
+    if (!draft || !draftMatchesPage(draft, bundle)) {
+      return NextResponse.json({ error: "Draft not found for this page" }, { status: 404 });
     }
 
     // Same weights as the baseline run — a delta must reflect the content
