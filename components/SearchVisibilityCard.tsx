@@ -29,13 +29,27 @@ export interface SerpRollupView {
   citedList: { keyword: string; pageUrl: string }[];
 }
 
+/** Roll-up of the LLM Prompt Set (real stored checks only). */
+export interface PromptSummaryView {
+  /** Active prompts in the project's set. */
+  total: number;
+  /** Prompts with at least one real (non-error) engine check. */
+  checked: number;
+  /** …of which at least one engine's answer cites the client's site. */
+  cited: number;
+  /** …of which the best result is a brand mention without a link. */
+  brandOnly: number;
+}
+
 export default function SearchVisibilityCard({
   projectId,
   rollup,
+  promptSummary,
   configured,
 }: {
   projectId: string;
   rollup: SerpRollupView | null;
+  promptSummary: PromptSummaryView | null;
   configured: boolean;
 }) {
   const router = useRouter();
@@ -89,7 +103,7 @@ export default function SearchVisibilityCard({
 
       {rollup && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
             <Stat
               label="AI Overview citations"
               value={`${rollup.aioCitedKws} / ${rollup.aioTriggeredKws}`}
@@ -114,6 +128,30 @@ export default function SearchVisibilityCard({
                 rollup.questionsTotal === 0
                   ? "flat"
                   : rollup.questionsCovered * 2 >= rollup.questionsTotal
+                  ? "good"
+                  : "warn"
+              }
+            />
+            <Stat
+              label="LLM prompts cited"
+              value={
+                promptSummary && promptSummary.checked > 0
+                  ? `${promptSummary.cited} / ${promptSummary.checked}`
+                  : "—"
+              }
+              hint={
+                promptSummary && promptSummary.total > 0
+                  ? `Prompts where at least one engine's answer cites your site, of ${promptSummary.checked} checked (${promptSummary.total} in the set${
+                      promptSummary.brandOnly > 0
+                        ? `; ${promptSummary.brandOnly} more get a brand mention without a link`
+                        : ""
+                    }). Real per-engine checks only.`
+                  : "No prompt checks run yet — manage the set in the LLM Prompt Set card below"
+              }
+              tone={
+                !promptSummary || promptSummary.checked === 0
+                  ? "flat"
+                  : promptSummary.cited > 0
                   ? "good"
                   : "warn"
               }

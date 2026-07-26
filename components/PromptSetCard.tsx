@@ -45,8 +45,19 @@ export interface PromptRowView {
   id: string;
   prompt: string;
   targetUrl: string | null;
+  /** Quality dimension the prompt probes (set on generated prompts). */
+  dimension?: string | null;
+  /** "manual" or "generated" (from a page's scored dimensions). */
+  source?: "manual" | "generated";
   checks: Partial<Record<PromptEngineView, PromptCheckView>>;
 }
+
+const DIMENSION_TAGS: Record<string, string> = {
+  coreIntent: "Core intent",
+  edgeCases: "Edge cases",
+  impliedQuestions: "Implied questions",
+  fanOutQueries: "Fan-out",
+};
 
 export interface LastRunView {
   at: string;
@@ -94,7 +105,7 @@ export default function PromptSetCard({
       if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
       setRows(data.prompts as PromptRowView[]);
       setDraft("");
-      if (data.skipped > 0) setMsg(`${data.added} added · ${data.skipped} skipped (duplicate or over the 50-prompt cap).`);
+      if (data.skipped > 0) setMsg(`${data.added} added · ${data.skipped} skipped (duplicate or over the 150-prompt cap).`);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Add failed");
     } finally {
@@ -222,7 +233,7 @@ export default function PromptSetCard({
             />
             <div className="flex items-center justify-between mt-1.5">
               <span className="text-[10.5px]" style={{ color: "var(--text-3)" }}>
-                {rows.length}/50 prompts · each check is a paid live call; real cost is reported
+                {rows.length}/150 prompts · each check is a paid live call; real cost is reported
                 after every run
               </span>
               <button
@@ -251,6 +262,16 @@ export default function PromptSetCard({
                   <div className="flex items-start justify-between gap-3">
                     <p className="text-xs font-semibold text-slate-800 min-w-0">
                       &ldquo;{r.prompt}&rdquo;
+                      {r.dimension && DIMENSION_TAGS[r.dimension] && (
+                        <span
+                          title={`Probes the ${DIMENSION_TAGS[r.dimension]} quality dimension${
+                            r.source === "generated" ? " · generated from the page's scored dimensions" : ""
+                          }`}
+                          className="ml-2 inline-block rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-indigo-600 align-middle"
+                        >
+                          {DIMENSION_TAGS[r.dimension]}
+                        </span>
+                      )}
                     </p>
                     <button
                       onClick={() => removePrompt(r.id)}

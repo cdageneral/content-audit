@@ -92,6 +92,8 @@ export interface WorkbenchProps {
   visibility: PageVisibility | null;
   /** Prompt Set rows matched to this URL (assigned or engine-cited). */
   promptVisibility: PromptRow[];
+  /** TRUE when DataForSEO LLM checks are configured (per-page runs allowed). */
+  promptChecksConfigured: boolean;
   promptVersion: string;
   scoringModel: string;
 }
@@ -201,24 +203,34 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   const [research, setResearch] = useState<Partial<Record<ScoreDimension, ResearchState>>>({});
   const [checkedSug, setCheckedSug] = useState<Record<string, boolean>>({});
 
+  // Live copies of the URL-level scorecard data — the strip mutates these
+  // after prompt generation, per-page check runs, and keyword-pref saves
+  // (each handler re-renders from the server's validated response).
+  const [visState, setVisState] = useState<PageVisibility | null>(props.visibility);
+  const [promptRows, setPromptRows] = useState<PromptRow[]>(props.promptVisibility);
+
   // ── Optimization targets (verified search-visibility data) ──
   // One deduped list: head term first, then every open AIO gap (page ranks,
-  // AI Overview shown, page not cited). All checked by default; checked
-  // targets feed Rewrite, Research, and Simulate coverage.
+  // AI Overview shown, page not cited), then selected supporting terms. All
+  // checked by default; checked targets feed Rewrite, Research, and Simulate
+  // coverage.
   const targetList = useMemo<VisibilityKeyword[]>(() => {
-    const vis = props.visibility;
+    const vis = visState;
     if (!vis) return [];
     const list: VisibilityKeyword[] = [];
     if (vis.headTerm) list.push(vis.headTerm);
     for (const g of vis.gaps) {
       if (!list.some((k) => k.keyword === g.keyword)) list.push(g);
     }
+    for (const k of vis.keywords) {
+      if (k.supporting && !list.some((t) => t.keyword === k.keyword)) list.push(k);
+    }
     return list.slice(0, 8);
-  }, [props.visibility]);
+  }, [visState]);
   // Prompt targets: prompts matched to this URL that no engine currently cites.
   const promptTargets = useMemo<PromptRow[]>(
-    () => props.promptVisibility.filter(isPromptGap).slice(0, 6),
-    [props.promptVisibility]
+    () => promptRows.filter(isPromptGap).slice(0, 6),
+    [promptRows]
   );
   const [checkedTargets, setCheckedTargets] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
@@ -226,6 +238,27 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     for (const p of promptTargets) init[p.prompt] = true;
     return init;
   });
+  // Targets that appear later (e.g. freshly generated prompts) default to
+  // checked — without clobbering anything the user has already unchecked.
+  useEffect(() => {
+    setCheckedTargets((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      for (const t of targetList) {
+        if (!(t.keyword in next)) {
+          next[t.keyword] = true;
+          changed = true;
+        }
+      }
+      for (const p of promptTargets) {
+        if (!(p.prompt in next)) {
+          next[p.prompt] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : prev;
+    });
+  }, [targetList, promptTargets]);
   const activeTargets = useMemo(
     () => [
       ...targetList.filter((t) => checkedTargets[t.keyword]).map((t) => t.keyword),
@@ -585,11 +618,19 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
         </div>
       )}
 
-      {/* Search & AI Visibility — verified SERP data for this URL (stored
-          snapshot; zero provider calls on page load) */}
+      {/* Search & AI Visibility — the per-URL scorecard: head term (with
+          override), supporting keywords, AIO/PAA status, and this page's
+          dimension-mapped prompt set. All verified stored data; the only
+          provider calls are the explicit Generate / Run checks buttons. */}
       <VisibilityStrip
-        visibility={props.visibility}
-        prompts={props.promptVisibility}
+        projectId={projectId}
+        pageId={pageId}
+        url={url}
+        visibility={visState}
+        prompts={promptRows}
+        promptChecksConfigured={props.promptChecksConfigured}
+        onVisibility={setVisState}
+        onPrompts={setPromptRows}
         open={visOpen}
         onToggle={() => setVisOpen((o) => !o)}
       />
@@ -1277,26 +1318,181 @@ function PromptEngineChips({ row }: { row: PromptRow }) {
   );
 }
 
+// Client-side mirrors of lib/db/prompts values (that module imports neon —
+// importing VALUES from it would drag server code into this bundle, so only
+// its types cross; the label map is duplicated here on purpose).
+const DIM_ORDER_WB = ["coreIntent", "edgeCases", "impliedQuestions", "fanOutQueries"] as const;
+const DIM_TAGS_WB: Record<string, { label: string; cls: string }> = {
+  coreIntent: { label: "Core intent", cls: "border-indigo-200 bg-indigo-50 text-indigo-700" },
+  edgeCases: { label: "Edge cases", cls: "border-sky-200 bg-sky-50 text-sky-700" },
+  impliedQuestions: { label: "Implied questions", cls: "border-teal-200 bg-teal-50 text-teal-700" },
+  fanOutQueries: { label: "Fan-out", cls: "border-violet-200 bg-violet-50 text-violet-700" },
+};
+
+/** Same loose URL identity as the server's urlKey (www/slash/case-insensitive). */
+function wbUrlKey(u: string): string {
+  return u
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+}
+
 function VisibilityStrip({
+  projectId,
+  pageId,
+  url,
   visibility,
   prompts,
+  promptChecksConfigured,
+  onVisibility,
+  onPrompts,
   open,
   onToggle,
 }: {
+  projectId: string;
+  pageId: string;
+  url: string;
   visibility: PageVisibility | null;
   prompts: PromptRow[];
+  promptChecksConfigured: boolean;
+  onVisibility: (v: PageVisibility) => void;
+  onPrompts: (rows: PromptRow[]) => void;
   open: boolean;
   onToggle: () => void;
 }) {
+  const [busy, setBusy] = useState<"" | "gen" | "run" | "prefs">("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [secs, setSecs] = useState(0);
+  useEffect(() => {
+    if (busy === "") return;
+    setSecs(0);
+    const id = setInterval(() => setSecs((s) => s + 1), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
+
+  async function savePrefs(headTerm: string | null, supporting: string[] | null) {
+    setBusy("prefs");
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/optimize/${pageId}/keyword-prefs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headTerm, supporting }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      if (data.visibility) onVisibility(data.visibility as PageVisibility);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Failed to save keyword assignment");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function currentSupporting(): string[] {
+    return (visibility?.keywords ?? []).filter((k) => k.supporting).map((k) => k.keyword);
+  }
+
+  function setHead(keyword: string) {
+    // "" = back to auto. Supporting selection is re-sent minus the new head.
+    const head = keyword || null;
+    const supporting = currentSupporting().filter((s) => s !== head);
+    void savePrefs(head, supporting.length ? supporting : null);
+  }
+
+  function toggleSupporting(keyword: string, on: boolean) {
+    const set = new Set(currentSupporting());
+    if (on) set.add(keyword);
+    else set.delete(keyword);
+    const head =
+      visibility?.headTermSource === "override" ? visibility.headTerm?.keyword ?? null : null;
+    void savePrefs(head, Array.from(set));
+  }
+
+  async function generate() {
+    setBusy("gen");
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/optimize/${pageId}/prompt-set`, { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      onPrompts(data.prompts as PromptRow[]);
+      setMsg(
+        `${data.added} prompt(s) generated from this page's scored dimensions${
+          data.skipped ? ` · ${data.skipped} skipped (duplicate or over cap)` : ""
+        }. Review below — run checks to test them against the live engines.`
+      );
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Prompt generation failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function runChecks() {
+    setBusy("run");
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/prompts/check`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pageUrl: url }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setMsg(
+        `Running ${data.checks} checks (${data.prompts} prompts × ${data.engines.length} engines) against the live engines — chips update below as real answers land.`
+      );
+      const key = wbUrlKey(url);
+      let polls = 0;
+      const iv = setInterval(async () => {
+        polls++;
+        try {
+          const r = await fetch(`/api/projects/${projectId}/prompts`);
+          const d = await r.json();
+          if (r.ok && Array.isArray(d.prompts)) {
+            const mine = (d.prompts as PromptRow[]).filter((p) => {
+              if (p.targetUrl && wbUrlKey(p.targetUrl) === key) return true;
+              return Object.values(p.checks).some(
+                (c) => c?.citedUrl && wbUrlKey(c.citedUrl) === key
+              );
+            });
+            onPrompts(mine);
+          }
+        } catch {
+          /* keep polling */
+        }
+        if (polls >= 18) clearInterval(iv);
+      }, 10_000);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Check run failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
   if (!visibility && prompts.length === 0) {
     return (
       <div className="rounded-xl border border-slate-200 bg-white px-5 py-3 flex items-center gap-3 flex-wrap">
         <h3 className="text-sm font-semibold text-slate-700">Search &amp; AI Visibility</h3>
-        <p className="text-xs" style={{ color: "var(--text-3)" }}>
+        <p className="text-xs min-w-0" style={{ color: "var(--text-3)" }}>
           No SERP data stored for this URL yet — run an audit (or &ldquo;Refresh SERP data&rdquo; on the
           project page) with the SERP provider configured to populate the head term, rankings, and
           AI Overview citation status.
         </p>
+        <button
+          onClick={generate}
+          disabled={busy !== ""}
+          className="ml-auto rounded-lg border border-indigo-300 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors flex-none"
+        >
+          {busy === "gen" ? `Generating… ${secs}s` : "✨ Generate prompt set"}
+        </button>
+        {msg && (
+          <p className="w-full text-xs rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-2 text-indigo-800">
+            {msg}
+          </p>
+        )}
       </div>
     );
   }
@@ -1311,6 +1507,9 @@ function VisibilityStrip({
             <div className="min-w-0">
               <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>
                 Head term{head.branded ? " (branded)" : ""}
+                {v!.headTermSource === "override" && (
+                  <span className="ml-1 normal-case font-semibold text-indigo-500">· assigned</span>
+                )}
               </span>
               <span className="text-sm font-bold truncate" style={{ color: "var(--text-1)" }}>{head.keyword}</span>
             </div>
@@ -1374,6 +1573,9 @@ function VisibilityStrip({
               <thead>
                 <tr className="text-left text-[9.5px] uppercase tracking-wide text-slate-400">
                   <th className="py-1 pr-3 font-bold">Ranked keyword</th>
+                  <th className="py-1 pr-3 font-bold" title="Head = the search term matching this page's core intent (one per page). Supporting = the page's subtopic terms. Both feed Optimization Targets.">
+                    Role
+                  </th>
                   {v.volumesVerified && <th className="py-1 pr-3 font-bold text-right">Vol/mo</th>}
                   <th className="py-1 pr-3 font-bold text-right">Pos</th>
                   <th className="py-1 pr-3 font-bold">AI Overview</th>
@@ -1381,11 +1583,36 @@ function VisibilityStrip({
                 </tr>
               </thead>
               <tbody>
-                {v.keywords.map((k) => (
+                {v.keywords.map((k) => {
+                  const isHead = head !== null && k.keyword === head.keyword;
+                  return (
                   <tr key={k.keyword} className="border-t border-slate-100">
                     <td className="py-1.5 pr-3 font-semibold text-slate-700">
                       {k.keyword}
                       {k.branded && <span className="ml-1.5 text-[9px] text-slate-400 font-bold uppercase">branded</span>}
+                    </td>
+                    <td className="py-1.5 pr-3 whitespace-nowrap">
+                      <label className="inline-flex items-center gap-1 mr-2.5 cursor-pointer" title="Make this the page's head term">
+                        <input
+                          type="radio"
+                          name="wb-head-term"
+                          checked={isHead}
+                          disabled={busy !== ""}
+                          onChange={() => setHead(k.keyword)}
+                          className="accent-indigo-600"
+                        />
+                        <span className={`text-[9.5px] font-bold uppercase ${isHead ? "text-indigo-600" : "text-slate-400"}`}>head</span>
+                      </label>
+                      <label className="inline-flex items-center gap-1 cursor-pointer" title="Count this as a supporting keyword for the page">
+                        <input
+                          type="checkbox"
+                          checked={k.supporting}
+                          disabled={busy !== "" || isHead}
+                          onChange={(e) => toggleSupporting(k.keyword, e.target.checked)}
+                          className="accent-indigo-600"
+                        />
+                        <span className={`text-[9.5px] font-bold uppercase ${k.supporting ? "text-teal-600" : "text-slate-400"}`}>support</span>
+                      </label>
                     </td>
                     {v.volumesVerified && (
                       <td className="py-1.5 pr-3 text-right font-mono text-slate-600">
@@ -1401,9 +1628,13 @@ function VisibilityStrip({
                       {k.paaPresent ? (k.paaOwned ? "✓ owned" : "present") : "—"}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
+            <p className="mt-2 text-[10px]" style={{ color: "var(--text-3)" }}>
+              Head/support assignments save per URL and survive re-audits{v.headTermSource === "auto" ? " · head term currently auto-derived (top non-branded keyword)" : ""}.
+            </p>
             {!v.volumesVerified && (
               // Grouped-volume guard: this snapshot's volumes are Google Ads
               // cluster totals, not per-keyword figures. Say so instead of
@@ -1417,24 +1648,72 @@ function VisibilityStrip({
           </div>
           )}
           <div className="px-5 py-2.5 border-t border-slate-100 bg-slate-50/60">
-            <p className="text-[10.5px] font-bold uppercase tracking-wide text-slate-500 mb-1.5">LLM Prompt Set</p>
+            <div className="flex items-center gap-2 mb-1.5 flex-wrap">
+              <p className="text-[10.5px] font-bold uppercase tracking-wide text-slate-500">
+                LLM Prompt Set — this page
+              </p>
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  onClick={generate}
+                  disabled={busy !== ""}
+                  title="Generate buyer-intent prompts from this page's scored dimensions (core intent, edge cases, implied questions, fan-out). One AI call; prompts are editable in the project's Prompt Set card."
+                  className="rounded-md border border-indigo-300 bg-white px-2.5 py-1 text-[10.5px] font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                >
+                  {busy === "gen" ? `Generating… ${secs}s` : "✨ Generate prompt set"}
+                </button>
+                {prompts.length > 0 && promptChecksConfigured && (
+                  <button
+                    onClick={runChecks}
+                    disabled={busy !== ""}
+                    title="Run this page's prompts against the live engines (paid DataForSEO calls; real cost lands in the ledger)"
+                    className="rounded-md bg-indigo-600 px-2.5 py-1 text-[10.5px] font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+                  >
+                    {busy === "run" ? `Dispatching… ${secs}s` : `▶ Run checks (${prompts.length} × 4)`}
+                  </button>
+                )}
+              </div>
+            </div>
+            {msg && (
+              <p className="mb-2 text-[11px] rounded-lg border border-indigo-200 bg-indigo-50/60 px-3 py-1.5 text-indigo-800">
+                {msg}
+              </p>
+            )}
             {prompts.length === 0 ? (
               <p className="text-[11px]" style={{ color: "var(--text-3)" }}>
-                No prompts matched to this URL yet. Manage the project&apos;s Prompt Set (and run
-                per-engine checks) from the LLM Prompt Set card on the project page — prompts
-                assigned to this page, or whose answers cite it, appear here. Nothing shown here
-                is ever estimated.
+                No prompts mapped to this URL yet. Generate a set from this page&apos;s scored
+                dimensions above, or assign prompts from the project&apos;s Prompt Set card.
+                Nothing shown here is ever estimated.
               </p>
             ) : (
-              <div className="space-y-1.5">
-                {prompts.map((p) => (
-                  <div key={p.id} className="flex items-start justify-between gap-3 flex-wrap">
-                    <span className="text-[11.5px] font-semibold text-slate-700 min-w-0">
-                      &ldquo;{p.prompt}&rdquo;
-                    </span>
-                    <PromptEngineChips row={p} />
-                  </div>
-                ))}
+              <div className="space-y-2">
+                {[...DIM_ORDER_WB, null].map((dim) => {
+                  const group = prompts.filter((p) =>
+                    dim === null ? !p.dimension : p.dimension === dim
+                  );
+                  if (group.length === 0) return null;
+                  const tag = dim ? DIM_TAGS_WB[dim] : null;
+                  return (
+                    <div key={dim ?? "general"}>
+                      <span
+                        className={`inline-block rounded border px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide mb-1 ${
+                          tag ? tag.cls : "border-slate-200 bg-white text-slate-500"
+                        }`}
+                      >
+                        {tag ? tag.label : "General"}
+                      </span>
+                      <div className="space-y-1.5">
+                        {group.map((p) => (
+                          <div key={p.id} className="flex items-start justify-between gap-3 flex-wrap">
+                            <span className="text-[11.5px] font-semibold text-slate-700 min-w-0">
+                              &ldquo;{p.prompt}&rdquo;
+                            </span>
+                            <PromptEngineChips row={p} />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
