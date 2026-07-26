@@ -214,6 +214,23 @@ export default async function ProjectHubPage({
   // ── LLM Prompt Set (Phase 2) — prompts + latest per-engine checks ──
   const promptRows = await getPromptRows(params.id).catch(() => []);
   const promptLastRun = await getLastRunSummary(params.id).catch(() => null);
+  // Roll-up for the Search Visibility card row (real stored checks only):
+  // a prompt is "checked" once any engine returned a real answer, "cited"
+  // when at least one of those answers links the client's site.
+  const promptSummary = (() => {
+    if (promptRows.length === 0) return null;
+    let checked = 0;
+    let cited = 0;
+    let brandOnly = 0;
+    for (const r of promptRows) {
+      const ok = Object.values(r.checks).filter((c) => c && c.status === "ok");
+      if (ok.length === 0) continue;
+      checked++;
+      if (ok.some((c) => c!.cited)) cited++;
+      else if (ok.some((c) => c!.brandMentioned)) brandOnly++;
+    }
+    return { total: promptRows.length, checked, cited, brandOnly };
+  })();
 
   // ── Previous-run averages per site (for the matrix ▲/▼ tickers) ──
   // history is ordered ASC; the second-to-last point per site is "last run".
@@ -434,6 +451,7 @@ export default async function ProjectHubPage({
         <SearchVisibilityCard
           projectId={params.id}
           rollup={serpRollup}
+          promptSummary={promptSummary}
           configured={serpEnabled}
         />
       )}
