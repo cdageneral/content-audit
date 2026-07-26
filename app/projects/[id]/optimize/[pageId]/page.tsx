@@ -9,8 +9,8 @@ import { notFound } from "next/navigation";
 import { neon } from "@neondatabase/serverless";
 import {
   getPageForOptimize,
-  getDraftsByPage,
-  getSimulationsByPage,
+  getDraftsByUrl,
+  getSimulationsByUrl,
 } from "@/lib/db/drafts";
 import { getProjectDetail } from "@/lib/db/projects";
 import {
@@ -51,9 +51,11 @@ export default async function OptimizePage({
 
   const baseline = await loadBaseline(params.pageId);
 
+  // URL-lineage loading (re-audit safe): drafts/simulations follow the URL,
+  // not the page id — a re-audit mints new page rows for the same page.
   const [drafts, sims, visibility, promptRows] = await Promise.all([
-    getDraftsByPage(params.pageId).catch(() => []),
-    getSimulationsByPage(params.pageId).catch(() => []),
+    getDraftsByUrl(params.id, bundle.page.url).catch(() => []),
+    getSimulationsByUrl(params.id, bundle.page.url).catch(() => []),
     // Stored SERP snapshot read only — no provider calls on page load.
     getPageVisibility(bundle.page.url).catch(() => null),
     // Prompt Set rows matched to this URL (assigned or cited) — stored data only.
