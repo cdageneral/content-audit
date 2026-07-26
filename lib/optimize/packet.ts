@@ -21,7 +21,12 @@ import {
   AlignmentType,
   BorderStyle,
 } from "docx";
-import { getDraft, getSimulation, getPageForOptimize } from "@/lib/db/drafts";
+import {
+  getDraft,
+  getSimulation,
+  getPageForOptimize,
+  draftMatchesPage,
+} from "@/lib/db/drafts";
 import { draftToCrawledPage } from "@/lib/optimize/transform";
 import { ALL_DIMENSIONS, DIMENSION_LABELS } from "@/lib/types";
 import type { DimensionScores, ScoreDimension } from "@/lib/types";
@@ -46,7 +51,14 @@ export async function buildPacket(
 ): Promise<BuiltPacket | null> {
   const draft = await getDraft(draftId);
   if (!draft) return null;
-  if (expectedPageId && draft.pageId !== expectedPageId) return null;
+  if (expectedPageId && draft.pageId !== expectedPageId) {
+    // Re-audits mint NEW page ids while drafts keep their original page row —
+    // the hub links current-run page ids to older drafts. Accept the pair when
+    // the expected page is the same project + same URL lineage; reject
+    // anything else (cross-page/cross-project ids stay 404).
+    const expected = await getPageForOptimize(expectedPageId);
+    if (!expected || !draftMatchesPage(draft, expected)) return null;
+  }
 
   const [simulation, bundle] = await Promise.all([
     simulationId ? getSimulation(simulationId) : Promise.resolve(null),
