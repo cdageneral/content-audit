@@ -1,6 +1,6 @@
 # Prism Optimizer
 
-Score every page on your website for **LLM readiness** across 8 dimensions — deployed on Vercel, powered by Claude.
+Score every page on your website for **LLM readiness** across 10 dimensions — deployed on Vercel, powered by Claude.
 
 ## Scoring Dimensions
 
@@ -19,6 +19,12 @@ Score every page on your website for **LLM readiness** across 8 dimensions — d
 | **Extractable** | Facts in text (not trapped in images/tables) |
 | **Citable** | Author, date, canonical URL, authority signals |
 | **Reusable** | Self-contained chunks, no cross-reference dependencies |
+
+### Search Visibility
+| Dimension | What it measures |
+|---|---|
+| **AIO Readiness** | Answer-first blocks an AI Overview can lift verbatim |
+| **PAA Coverage** | Direct answers to the People Also Ask questions, under matching headings |
 
 ---
 
