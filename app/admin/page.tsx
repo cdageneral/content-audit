@@ -15,7 +15,7 @@
 import { useEffect, useState, useCallback, Fragment } from 'react';
 import AdminUsageTab from '@/components/AdminUsageTab';
 
-const BRAND = 'Meridian';
+const BRAND = 'Prism Optimizer';
 
 type Role = 'super_admin' | 'company_admin' | 'client_user';
 type Status = 'active' | 'pending' | 'suspended';
@@ -114,13 +114,11 @@ export default function AdminPage() {
         <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <svg viewBox="0 0 100 100" fill="none" className="w-6 h-6" aria-hidden="true">
-              <circle cx="50" cy="48" r="31" stroke="#14284a" strokeWidth={5} />
-              <polygon points="50,20 55,48 45,48" fill="#7c3aed" />
-              <polygon points="45,48 55,48 50,76" fill="#14284a" />
-              <circle cx="50" cy="48" r={4.5} fill="#ffffff" />
-              <rect x="56" y="56" width="6" height="10" rx="1.5" fill="#c4b5fd" />
-              <rect x="64" y="49" width="6" height="17" rx="1.5" fill="#a78bfa" />
-              <rect x="72" y="42" width="6" height="24" rx="1.5" fill="#7c3aed" />
+              <path d="M4 66 L44 50" stroke="#c9a4fd" strokeWidth={7} strokeLinecap="round" />
+              <path d="M56 46 L98 30" stroke="#ce9efc" strokeWidth={6} strokeLinecap="round" />
+              <path d="M56 49 L98 44" stroke="#a56bfb" strokeWidth={6} strokeLinecap="round" />
+              <path d="M56 52 L98 60" stroke="#6f1cfe" strokeWidth={6} strokeLinecap="round" />
+              <path d="M50 14 L83 82 L17 82 Z" stroke="#0b0b24" strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />
             </svg>
             <span className="text-lg font-bold">{BRAND}</span>
             <span className="text-[10px] uppercase tracking-wider text-slate-400 border border-slate-200 rounded px-2 py-0.5">Admin</span>
