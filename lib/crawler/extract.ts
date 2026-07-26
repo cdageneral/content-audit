@@ -178,6 +178,7 @@ function parseHtml(
     metadata,
     httpStatus,
     crawledAt: new Date(),
+    htmlBytes: html.length,
   };
 }
 
