@@ -50,7 +50,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     if (add.length === 0) {
       return NextResponse.json({ error: "No prompts provided" }, { status: 400 });
     }
-    const result = await addPrompts(params.id, add.slice(0, 50));
+    // Optional URL mapping: the workbench adds prompts pre-mapped to its page.
+    const targetUrl =
+      typeof body?.targetUrl === "string" && body.targetUrl.trim()
+        ? (body.targetUrl as string).trim()
+        : null;
+    const result = await addPrompts(params.id, add.slice(0, 50), { targetUrl });
     const rows = await getPromptRows(params.id);
     return NextResponse.json({ ...result, prompts: rows });
   } catch (err) {
