@@ -91,6 +91,95 @@ function isBlockedPage(page: {
   return false;
 }
 
+// ── Thin-content detection ────────────────────────────────────
+// A page can come back HTTP 200, carry no challenge phrase, and still hold
+// almost no readable text — the signature of copy that only exists after
+// client-side rendering. Before 2026-07-26 such a page was stored and scored
+// as-is, so its dimension scores were computed against essentially nothing.
+// Neither guard above catches it: isBlockedPage() needs a blocked status or a
+// known challenge phrase, and the batch-level headless rescue only fires when
+// EVERY page in the batch failed.
+//
+// The tell is the pairing, not the word count alone: a genuinely short page
+// has short HTML too. Large HTML + almost no extractable text = worth a
+// browser. 120 words is roughly the floor below which the 10 scoring
+// dimensions have nothing real to judge, so a false positive costs one browser
+// launch and a true positive rescues a page that would otherwise score noise.
+const THIN_WORDS = 120;
+const THIN_HTML_BYTES = 20_000;
+
+// Headless is slow (browser launch + networkidle per page) and this handler
+// has a single 300s budget shared with up to BATCH_SIZE plain fetches, so the
+// retry is capped both by count and by wall clock.
+const THIN_HEADLESS_MAX = 3;
+const THIN_RESCUE_DEADLINE_MS = 210_000;
+
+function isThinPage(page: {
+  wordCount: number;
+  httpStatus: number;
+  htmlBytes?: number;
+}): boolean {
+  if (page.httpStatus >= 400) return false; // an error page is a different problem
+  if (page.wordCount >= THIN_WORDS) return false;
+  return (page.htmlBytes ?? 0) >= THIN_HTML_BYTES;
+}
+
+/**
+ * Per-page rescue for suspiciously thin 200s. The plain-fetch version has
+ * already been stored, so this can only improve things: the headless result
+ * replaces it ONLY when it yields strictly more words. Any failure leaves the
+ * stored page untouched and never fails the job.
+ */
+async function rescueThinPages(
+  jobId: string,
+  thin: { url: string; words: number }[],
+  auth: CrawlBatchMessage["auth"],
+  batchStartedAt: number
+): Promise<number> {
+  // Worst offenders first, so the cap spends the budget where it matters.
+  const ordered = [...thin].sort((a, b) => a.words - b.words);
+  const batch = ordered.slice(0, THIN_HEADLESS_MAX);
+  const dropped = ordered.length - batch.length;
+  if (dropped > 0) {
+    // Never let a cap read as "we checked everything".
+    console.warn(
+      `[crawl] Job ${jobId}: ${ordered.length} thin pages, retrying the ${batch.length} thinnest — ${dropped} left as crawled (cap ${THIN_HEADLESS_MAX}/batch).`
+    );
+  }
+
+  let improved = 0;
+  for (const { url, words } of batch) {
+    if (Date.now() - batchStartedAt > THIN_RESCUE_DEADLINE_MS) {
+      // Out of time: the stored plain-fetch copies stand. Say so rather than
+      // letting a silent skip look like "headless found nothing".
+      console.warn(
+        `[crawl] Job ${jobId}: out of time budget — skipping headless retry for ${url} and any remaining thin pages.`
+      );
+      break;
+    }
+    try {
+      const page = await extractPage(jobId, url, {
+        usePlaywright: true,
+        auth: auth ?? undefined,
+      });
+      if (page && !isBlockedPage(page) && page.wordCount > words) {
+        await upsertPage(page);
+        improved++;
+        console.log(
+          `[crawl] 🅟↑ ${url}: ${words} → ${page.wordCount} words (headless)`
+        );
+      } else {
+        console.warn(
+          `[crawl] 🅟= ${url}: headless gave no more text (${words} words kept) — page is genuinely thin.`
+        );
+      }
+    } catch (err) {
+      console.error(`[crawl] thin-rescue error ${url} — keeping plain-fetch copy:`, err);
+    }
+  }
+  return improved;
+}
+
 function blockedMessage(status: number): string {
   const code = status && status >= 400 ? `HTTP ${status}` : "bot challenge";
   return `This site blocks automated crawling (${code}), so it can't be audited. The crawl was stopped after repeated blocks. If the site relies on JavaScript, enabling headless-browser crawling may help.`;
@@ -189,12 +278,16 @@ async function handleCrawlBatch(
 
   console.log(`[crawl] Job ${jobId}: batch ${batchIndex + 1}/${totalBatches} (${urls.length} URLs)`);
 
+  const batchStartedAt = Date.now();
+
   const job = await getJob(jobId);
   if (!job || job.status === "failed" || job.status === "scoring" || job.status === "done") return;
 
   let okCount = 0;
   let blockedCount = 0;
   let lastBlockStatus = 0;
+  // 200s that stored almost no text — retried in a real browser after this pass.
+  const thinPages: { url: string; words: number }[] = [];
 
   for (let u = 0; u < urls.length; u++) {
     const url = urls[u];
@@ -211,7 +304,15 @@ async function handleCrawlBatch(
       } else if (page) {
         await upsertPage(page);
         okCount++;
-        console.log(`[crawl] ✓ ${url}`);
+        if (isThinPage(page)) {
+          // Stored so nothing is lost, but flagged: large HTML, almost no text.
+          thinPages.push({ url, words: page.wordCount });
+          console.warn(
+            `[crawl] ✓⚠ ${url}: only ${page.wordCount} words from ${page.htmlBytes} bytes of HTML — queued for headless retry.`
+          );
+        } else {
+          console.log(`[crawl] ✓ ${url}`);
+        }
       } else {
         console.warn(`[crawl] ✗ ${url}: returned null (empty or unreachable)`);
       }
@@ -252,6 +353,19 @@ async function handleCrawlBatch(
     }
     okCount += salvaged;
     console.log(`[crawl] Job ${jobId}: headless rescue salvaged ${salvaged} page(s).`);
+  }
+
+  // ── Thin-page rescue ────────────────────────────────────────
+  // Separate from the block rescue above: this runs even when the batch
+  // mostly succeeded, because a single JS-rendered page inside a healthy
+  // site would otherwise be scored against an empty body. Pages are already
+  // stored, so this only ever upgrades them — progress counters are NOT
+  // re-incremented here.
+  if (thinPages.length > 0) {
+    const improved = await rescueThinPages(jobId, thinPages, auth, batchStartedAt);
+    console.log(
+      `[crawl] Job ${jobId}: thin-page retry improved ${improved}/${thinPages.length} page(s).`
+    );
   }
 
   // Re-fetch job to get latest crawled count after this batch
