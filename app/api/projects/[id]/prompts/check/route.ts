@@ -15,7 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { randomUUID } from "crypto";
 import { checkProjectAccess } from "@/lib/auth/access";
 import { dfsLlmConfigured } from "@/lib/serp/llm";
-import { listPrompts, countRecentChecks, PROMPT_ENGINES } from "@/lib/db/prompts";
+import { listPrompts, countRecentChecks, urlKey, PROMPT_ENGINES } from "@/lib/db/prompts";
 import { enqueuePromptBatch } from "@/lib/queue/qstash";
 
 export const dynamic = "force-dynamic";
@@ -25,10 +25,18 @@ type Params = { params: { id: string } };
 
 const DAILY_CAP = parseInt(process.env.PROMPT_CHECK_DAILY_CAP ?? "400", 10);
 
-export async function POST(_req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, { params }: Params) {
   try {
     const gate = await checkProjectAccess(params.id);
     if (!gate.ok) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // Optional per-URL scope: run only the prompts mapped to one page
+    // (workbench "Run checks for this page"). Absent → whole set, as before.
+    const body = await req.json().catch(() => null);
+    const pageUrl =
+      typeof body?.pageUrl === "string" && body.pageUrl.trim()
+        ? (body.pageUrl as string).trim()
+        : null;
 
     if (!dfsLlmConfigured()) {
       return NextResponse.json(
@@ -40,10 +48,18 @@ export async function POST(_req: NextRequest, { params }: Params) {
       );
     }
 
-    const prompts = await listPrompts(params.id);
+    let prompts = await listPrompts(params.id);
+    if (pageUrl) {
+      const key = urlKey(pageUrl);
+      prompts = prompts.filter((p) => p.targetUrl && urlKey(p.targetUrl) === key);
+    }
     if (prompts.length === 0) {
       return NextResponse.json(
-        { error: "No prompts yet — add prompts to the set first." },
+        {
+          error: pageUrl
+            ? "No prompts mapped to this page yet — generate or assign prompts first."
+            : "No prompts yet — add prompts to the set first.",
+        },
         { status: 409 }
       );
     }
