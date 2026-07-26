@@ -344,7 +344,7 @@ function sanitizeClassification(raw: Record<string, unknown>): PageClassificatio
 
 /**
  * Classification-only call for the backfill path: buckets an already-scored
- * page without re-running the full 8-dimension score (cheaper + leaves the
+ * page without re-running the full 10-dimension score (cheaper + leaves the
  * existing scores untouched).
  */
 export async function classifyPage(

@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────
 //  The scoring prompt — the core IP of the audit agent.
-//  Instructs Claude to evaluate content across 8 dimensions
+//  Instructs Claude to evaluate content across 10 dimensions
 //  and return structured JSON via tool_use.
 // ─────────────────────────────────────────────────────────────
 
