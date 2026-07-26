@@ -31,6 +31,27 @@ export const ENGINE_LABELS: Record<PromptEngine, string> = {
   perplexity: "Perplexity",
 };
 
+/**
+ * Content-quality dimensions a prompt can map to (URL-level model,
+ * 2026-07-26): the head search term matches a page's core intent; prompts
+ * probe the quality dimensions — core intent, edge cases, implied
+ * questions, and fan-out queries. Keys match ScoreDimension names.
+ */
+export const PROMPT_DIMENSIONS = [
+  "coreIntent",
+  "edgeCases",
+  "impliedQuestions",
+  "fanOutQueries",
+] as const;
+export type PromptDimension = (typeof PROMPT_DIMENSIONS)[number];
+
+export const PROMPT_DIMENSION_LABELS: Record<PromptDimension, string> = {
+  coreIntent: "Core intent",
+  edgeCases: "Edge cases",
+  impliedQuestions: "Implied questions",
+  fanOutQueries: "Fan-out",
+};
+
 let promptSchemaReady: Promise<void> | null = null;
 
 export function ensurePromptSchema(): Promise<void> {
@@ -50,6 +71,15 @@ export function ensurePromptSchema(): Promise<void> {
       await sql`
         CREATE INDEX IF NOT EXISTS idx_project_prompts_project
         ON project_prompts(project_id, created_at)
+      `;
+      // URL-level prompt model (2026-07-26): which quality dimension the
+      // prompt probes, and whether it was hand-entered or generated from the
+      // page's scored dimensions. Lazy ALTERs — existing rows stay valid.
+      await sql`
+        ALTER TABLE project_prompts ADD COLUMN IF NOT EXISTS dimension TEXT
+      `;
+      await sql`
+        ALTER TABLE project_prompts ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'manual'
       `;
       await sql`
         CREATE TABLE IF NOT EXISTS prompt_checks (
@@ -94,6 +124,10 @@ export interface ProjectPrompt {
   projectId: string;
   prompt: string;
   targetUrl: string | null;
+  /** Quality dimension this prompt probes, when known. */
+  dimension: PromptDimension | null;
+  /** "manual" (typed into the hub card) or "generated" (from scored dims). */
+  source: "manual" | "generated";
   active: boolean;
   createdAt: string; // ISO — serializable across the server→client boundary
 }
@@ -126,10 +160,16 @@ export interface PromptRow {
   id: string;
   prompt: string;
   targetUrl: string | null;
+  dimension: PromptDimension | null;
+  source: "manual" | "generated";
   checks: Partial<Record<PromptEngine, PromptCheck>>;
 }
 
-const MAX_PROMPTS_PER_PROJECT = 50;
+// Raised 50 → 150 (2026-07-26): prompt sets are now generated per URL
+// (≤12 each), so a project's cap must hold more than a handful of pages.
+const MAX_PROMPTS_PER_PROJECT = 150;
+/** Cap on prompts mapped to one URL — keeps a per-page check run ≤48 calls. */
+export const MAX_PROMPTS_PER_URL = 12;
 const MAX_PROMPT_CHARS = 500; // DataForSEO user_prompt hard limit
 
 // ── Prompt CRUD ───────────────────────────────────────────────
@@ -170,6 +210,47 @@ export async function addPrompts(
     `;
     seen.add(text.toLowerCase());
     added++;
+  }
+  return { added, skipped };
+}
+
+/**
+ * Insert generated, dimension-labeled prompts pre-mapped to one URL.
+ * Dedupe is project-wide (same text = same prompt regardless of page);
+ * both the per-URL cap and the project cap are enforced here so a
+ * client can't overfill either by replaying the generate call.
+ */
+export async function addGeneratedPrompts(
+  projectId: string,
+  targetUrl: string,
+  items: { prompt: string; dimension: PromptDimension }[]
+): Promise<{ added: number; skipped: number }> {
+  await ensurePromptSchema();
+  const sql = db();
+  const existing = await listPrompts(projectId);
+  const seen = new Set(existing.map((p) => p.prompt.trim().toLowerCase()));
+  const key = urlKey(targetUrl);
+  let onUrl = existing.filter((p) => p.targetUrl && urlKey(p.targetUrl) === key).length;
+  let added = 0;
+  let skipped = 0;
+  for (const item of items) {
+    const text = item.prompt.trim().slice(0, MAX_PROMPT_CHARS);
+    const dim = PROMPT_DIMENSIONS.includes(item.dimension) ? item.dimension : null;
+    if (!text || !dim || seen.has(text.toLowerCase())) {
+      skipped++;
+      continue;
+    }
+    if (onUrl >= MAX_PROMPTS_PER_URL || existing.length + added >= MAX_PROMPTS_PER_PROJECT) {
+      skipped++;
+      continue;
+    }
+    await sql`
+      INSERT INTO project_prompts (project_id, prompt, target_url, dimension, source)
+      VALUES (${projectId}, ${text}, ${targetUrl}, ${dim}, 'generated')
+    `;
+    seen.add(text.toLowerCase());
+    added++;
+    onUrl++;
   }
   return { added, skipped };
 }
@@ -272,6 +353,8 @@ export async function getPromptRows(projectId: string): Promise<PromptRow[]> {
     id: p.id,
     prompt: p.prompt,
     targetUrl: p.targetUrl,
+    dimension: p.dimension,
+    source: p.source,
     checks: byPrompt.get(p.id) ?? {},
   }));
 }
@@ -354,11 +437,16 @@ export function urlKey(u: string): string {
 }
 
 function rowToPrompt(r: Record<string, unknown>): ProjectPrompt {
+  const dim = r.dimension as string | null;
   return {
     id: r.id as string,
     projectId: r.project_id as string,
     prompt: r.prompt as string,
     targetUrl: (r.target_url as string | null) ?? null,
+    dimension: PROMPT_DIMENSIONS.includes(dim as PromptDimension)
+      ? (dim as PromptDimension)
+      : null,
+    source: r.source === "generated" ? "generated" : "manual",
     active: (r.active as boolean) ?? true,
     createdAt: new Date(r.created_at as string).toISOString(),
   };
