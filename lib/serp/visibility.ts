@@ -13,6 +13,7 @@
 import { neon } from "@neondatabase/serverless";
 import { ensureSerpSchema } from "@/lib/db/serp";
 import { getPromptRowsForUrl } from "@/lib/db/prompts";
+import { getKeywordPrefs } from "@/lib/db/keywordPrefs";
 
 function db() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL not set");
@@ -37,6 +38,12 @@ export interface VisibilityKeyword {
   branded: boolean;
   /** Position in the previous snapshot of this URL, when one exists. */
   prevPosition: number | null;
+  /**
+   * TRUE when this keyword counts as a supporting term for the page —
+   * explicit selection when prefs exist, else every non-branded ranked
+   * keyword other than the head term.
+   */
+  supporting: boolean;
 }
 
 export interface PageVisibility {
@@ -52,10 +59,14 @@ export interface PageVisibility {
    */
   volumesVerified: boolean;
   /**
-   * Highest-volume non-branded ranked keyword — the page's head term. Falls
-   * back to best rank when volumes aren't trustworthy.
+   * The page's head term — the search query that matches its core intent.
+   * Auto-derived (highest-volume non-branded ranked keyword; best rank when
+   * volumes aren't trustworthy) unless a stored per-URL override selects a
+   * different RANKED keyword.
    */
   headTerm: VisibilityKeyword | null;
+  /** "override" when a stored pref picked the head term; else "auto". */
+  headTermSource: "auto" | "override";
   /** Ranked keywords, volume desc (best rank first when volumes are unverified). */
   keywords: VisibilityKeyword[];
   /** Non-branded keywords whose SERP shows an AI Overview. */
@@ -79,7 +90,10 @@ const MAX_KEYWORDS = 15;
  * prior snapshot of the same URL. Returns null when no data exists; callers
  * render an honest empty state instead of placeholders.
  */
-export async function getPageVisibility(pageUrl: string): Promise<PageVisibility | null> {
+export async function getPageVisibility(
+  pageUrl: string,
+  projectId?: string | null
+): Promise<PageVisibility | null> {
   try {
     await ensureSerpSchema();
     const sql = db();
@@ -124,6 +138,7 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
       paaOwned: k.paa_owned as boolean,
       branded: k.branded as boolean,
       prevPosition: prevPos.get(k.keyword as string) ?? null,
+      supporting: false, // assigned below once the head term is known
     }));
 
     // Volume desc when the volumes are real per-keyword numbers; best organic
@@ -139,7 +154,36 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
     // Head term: top non-branded ranked keyword under the sort above; if every
     // ranked keyword is branded, fall back to the top branded one (still real
     // data — the branded flag stays visible in the UI).
-    const headTerm = nonBranded[0] ?? all[0] ?? null;
+    let headTerm = nonBranded[0] ?? all[0] ?? null;
+    let headTermSource: "auto" | "override" = "auto";
+
+    // Stored per-URL prefs (project-scoped): the override can only SELECT a
+    // keyword that exists in this snapshot — a pref pointing at a term the
+    // page no longer ranks for silently falls back to auto, because there is
+    // no verified data to show for it.
+    const prefs = projectId ? await getKeywordPrefs(projectId, pageUrl) : null;
+    if (prefs?.headTerm) {
+      const chosen = all.find(
+        (k) => k.keyword.toLowerCase() === prefs.headTerm!.toLowerCase()
+      );
+      if (chosen) {
+        headTerm = chosen;
+        headTermSource = "override";
+      }
+    }
+
+    // Supporting terms: explicit selection when prefs carry one, else every
+    // non-branded ranked keyword other than the head term.
+    const supportingSet = prefs?.supporting
+      ? new Set(prefs.supporting.map((s) => s.toLowerCase()))
+      : null;
+    for (const k of all) {
+      const isHead = headTerm !== null && k.keyword === headTerm.keyword;
+      k.supporting = supportingSet
+        ? !isHead && supportingSet.has(k.keyword.toLowerCase())
+        : !isHead && !k.branded;
+    }
+
     const gaps = nonBranded.filter((k) => k.aioTriggered && !k.aioCited);
 
     return {
@@ -148,6 +192,7 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
       prevFetchedAt: prior ? new Date(prior.fetched_at as string).toISOString() : null,
       volumesVerified,
       headTerm,
+      headTermSource,
       keywords: all.slice(0, MAX_KEYWORDS),
       aioQueries: nonBranded.filter((k) => k.aioTriggered).length,
       aioCited: nonBranded.filter((k) => k.aioCited).length,
@@ -170,17 +215,49 @@ export async function getPageVisibility(pageUrl: string): Promise<PageVisibility
  */
 export async function resolveVisibilityTargets(
   pageUrl: string,
-  requested: string[]
+  requested: string[],
+  projectId?: string | null
 ): Promise<VisibilityKeyword[]> {
   if (requested.length === 0) return [];
-  const vis = await getPageVisibility(pageUrl);
+  const vis = await getPageVisibility(pageUrl, projectId);
   if (!vis) return [];
   const wanted = new Set(requested.map((s) => s.trim().toLowerCase()).filter(Boolean));
   const pool: VisibilityKeyword[] = [...vis.gaps];
   if (vis.headTerm && !pool.some((k) => k.keyword === vis.headTerm!.keyword)) {
     pool.push(vis.headTerm);
   }
+  // Supporting terms are legitimate targets too (URL-level model): any
+  // stored ranked keyword marked supporting joins the selectable pool.
+  for (const k of vis.keywords) {
+    if (k.supporting && !pool.some((p) => p.keyword === k.keyword)) pool.push(k);
+  }
   return pool.filter((k) => wanted.has(k.keyword.toLowerCase())).slice(0, 8);
+}
+
+/**
+ * All keyword strings in the latest stored snapshot for a URL — the
+ * validation universe for keyword-pref writes. Empty when no data exists.
+ */
+export async function listStoredKeywords(pageUrl: string): Promise<string[]> {
+  try {
+    await ensureSerpSchema();
+    const sql = db();
+    const snaps = await sql`
+      SELECT s.id FROM serp_snapshots s
+      WHERE s.page_url = ${pageUrl}
+        AND EXISTS (SELECT 1 FROM serp_keywords k WHERE k.snapshot_id = s.id)
+      ORDER BY s.fetched_at DESC
+      LIMIT 1
+    `;
+    if (snaps.length === 0) return [];
+    const rows = await sql`
+      SELECT keyword FROM serp_keywords WHERE snapshot_id = ${snaps[0].id as string}
+    `;
+    return rows.map((r) => r.keyword as string);
+  } catch (err) {
+    console.error(`[serp] keyword list failed for ${pageUrl}:`, err);
+    return [];
+  }
 }
 
 // ── Combined SERP + LLM-prompt target resolution ─────────────
@@ -209,7 +286,7 @@ export async function resolveAllTargets(
   if (requested.length === 0) return { serp: [], prompts: [] };
   const wanted = new Set(requested.map((s) => s.trim().toLowerCase()).filter(Boolean));
 
-  const serp = await resolveVisibilityTargets(pageUrl, requested).catch(
+  const serp = await resolveVisibilityTargets(pageUrl, requested, projectId).catch(
     () => [] as VisibilityKeyword[]
   );
 
