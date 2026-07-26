@@ -87,6 +87,13 @@ export interface CrawledPage {
   metadata: PageMetadata;
   httpStatus: number;
   crawledAt: Date;
+  /**
+   * Size of the raw HTML response this page was parsed from, in bytes.
+   * Transient — never persisted. Used to spot the "large HTML, almost no
+   * extractable text" signature of a JS-rendered page so it can be retried
+   * in a real browser instead of being scored against nothing.
+   */
+  htmlBytes?: number;
 }
 
 export interface PageMetadata {
