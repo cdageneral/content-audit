@@ -264,7 +264,11 @@ These queries were captured from live Google SERPs. The page ranks for each, but
 ${serpTargets
         .map(
           (t) =>
-            `- "${t.keyword}" (${t.volume.toLocaleString()}/mo · current position #${t.position}${t.aioTriggered ? " · AI Overview shown, this page not cited" : ""})`
+            // Volume is omitted when the snapshot predates per-keyword
+            // verification — never hand the model a grouped Google-Ads total.
+            `- "${t.keyword}" (${
+              t.volume !== null ? `${t.volume.toLocaleString()}/mo · ` : ""
+            }current position #${t.position}${t.aioTriggered ? " · AI Overview shown, this page not cited" : ""})`
         )
         .join("\n")}
 
