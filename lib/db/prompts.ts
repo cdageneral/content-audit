@@ -187,12 +187,18 @@ export async function listPrompts(projectId: string): Promise<ProjectPrompt[]> {
 
 export async function addPrompts(
   projectId: string,
-  texts: string[]
+  texts: string[],
+  opts?: { targetUrl?: string | null }
 ): Promise<{ added: number; skipped: number }> {
   await ensurePromptSchema();
   const sql = db();
   const existing = await listPrompts(projectId);
   const seen = new Set(existing.map((p) => p.prompt.trim().toLowerCase()));
+  const targetUrl = opts?.targetUrl ?? null;
+  // Per-URL cap applies when adding mapped prompts (URL-level model).
+  let onUrl = targetUrl
+    ? existing.filter((p) => p.targetUrl && urlKey(p.targetUrl) === urlKey(targetUrl)).length
+    : 0;
   let added = 0;
   let skipped = 0;
   for (const raw of texts) {
@@ -205,11 +211,17 @@ export async function addPrompts(
       skipped++;
       continue;
     }
+    if (targetUrl && onUrl >= MAX_PROMPTS_PER_URL) {
+      skipped++;
+      continue;
+    }
     await sql`
-      INSERT INTO project_prompts (project_id, prompt) VALUES (${projectId}, ${text})
+      INSERT INTO project_prompts (project_id, prompt, target_url)
+      VALUES (${projectId}, ${text}, ${targetUrl})
     `;
     seen.add(text.toLowerCase());
     added++;
+    if (targetUrl) onUrl++;
   }
   return { added, skipped };
 }
@@ -362,6 +374,12 @@ export async function getPromptRows(projectId: string): Promise<PromptRow[]> {
 /**
  * Prompts relevant to one page URL: assigned to it (target_url), or whose
  * latest check on any engine cited it. urlKey-insensitive (www/slash/case).
+ *
+ * Homepage rule (URL-level model, 2026-07-26): prompts with NO target_url
+ * are category/brand-level questions — their intended target is the site
+ * itself, so they surface on the HOMEPAGE's optimize page (the project's
+ * website_url). All prompt management lives on the per-URL workbench, so
+ * without this rule unassigned prompts would be unreachable.
  */
 export async function getPromptRowsForUrl(
   projectId: string | null,
@@ -371,8 +389,10 @@ export async function getPromptRowsForUrl(
     if (!projectId) return [];
     const rows = await getPromptRows(projectId);
     const key = urlKey(pageUrl);
+    const isHomepage = await isProjectHomepage(projectId, key);
     return rows.filter((r) => {
       if (r.targetUrl && urlKey(r.targetUrl) === key) return true;
+      if (!r.targetUrl && isHomepage) return true;
       for (const c of Object.values(r.checks)) {
         if (c?.citedUrl && urlKey(c.citedUrl) === key) return true;
       }
@@ -381,6 +401,20 @@ export async function getPromptRowsForUrl(
   } catch (err) {
     console.error(`[prompts] rows-for-url failed for ${pageUrl}:`, err);
     return [];
+  }
+}
+
+/** TRUE when urlKeyOfPage equals the project's website_url key (its homepage). */
+async function isProjectHomepage(projectId: string, urlKeyOfPage: string): Promise<boolean> {
+  try {
+    const sql = db();
+    const rows = await sql`
+      SELECT website_url FROM projects WHERE id = ${projectId}
+    `;
+    const site = rows[0]?.website_url as string | undefined;
+    return Boolean(site) && urlKey(site!) === urlKeyOfPage;
+  } catch {
+    return false;
   }
 }
 
