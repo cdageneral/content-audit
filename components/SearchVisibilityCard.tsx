@@ -146,7 +146,7 @@ export default function SearchVisibilityCard({
                         ? `; ${promptSummary.brandOnly} more get a brand mention without a link`
                         : ""
                     }). Real per-engine checks only.`
-                  : "No prompt checks run yet — manage the set in the LLM Prompt Set card below"
+                  : "No prompt checks run yet — each page's prompts are managed on its Optimize workbench (Search & AI Visibility → Details)"
               }
               tone={
                 !promptSummary || promptSummary.checked === 0

@@ -1361,8 +1361,9 @@ function VisibilityStrip({
   open: boolean;
   onToggle: () => void;
 }) {
-  const [busy, setBusy] = useState<"" | "gen" | "run" | "prefs">("");
+  const [busy, setBusy] = useState<"" | "gen" | "run" | "prefs" | "add">("");
   const [msg, setMsg] = useState<string | null>(null);
+  const [addDraft, setAddDraft] = useState("");
   const [secs, setSecs] = useState(0);
   useEffect(() => {
     if (busy === "") return;
@@ -1410,6 +1411,60 @@ function VisibilityStrip({
     void savePrefs(head, Array.from(set));
   }
 
+  /**
+   * Keep only rows that belong to THIS page from a full project fetch:
+   * mapped to this URL, cited at this URL, or already displayed (covers
+   * homepage-level prompts the server matched on first render).
+   */
+  function mineFrom(all: PromptRow[]): PromptRow[] {
+    const key = wbUrlKey(url);
+    const keep = new Set(prompts.map((p) => p.id));
+    return all.filter((p) => {
+      if (p.targetUrl && wbUrlKey(p.targetUrl) === key) return true;
+      if (keep.has(p.id)) return true;
+      return Object.values(p.checks).some(
+        (c) => c?.citedUrl && wbUrlKey(c.citedUrl) === key
+      );
+    });
+  }
+
+  async function addManual() {
+    const texts = addDraft
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (texts.length === 0) return;
+    setBusy("add");
+    setMsg(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/prompts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ add: texts, targetUrl: url }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      onPrompts(mineFrom(data.prompts as PromptRow[]));
+      setAddDraft("");
+      if (data.skipped > 0) {
+        setMsg(
+          `${data.added} added · ${data.skipped} skipped (duplicate or over the ${12}-per-page / 150-per-project cap).`
+        );
+      }
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : "Add failed");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function removePrompt(promptId: string) {
+    onPrompts(prompts.filter((p) => p.id !== promptId));
+    await fetch(`/api/projects/${projectId}/prompts?promptId=${promptId}`, {
+      method: "DELETE",
+    }).catch(() => undefined);
+  }
+
   async function generate() {
     setBusy("gen");
     setMsg(null);
@@ -1444,7 +1499,6 @@ function VisibilityStrip({
       setMsg(
         `Running ${data.checks} checks (${data.prompts} prompts × ${data.engines.length} engines) against the live engines — chips update below as real answers land.`
       );
-      const key = wbUrlKey(url);
       let polls = 0;
       const iv = setInterval(async () => {
         polls++;
@@ -1452,13 +1506,7 @@ function VisibilityStrip({
           const r = await fetch(`/api/projects/${projectId}/prompts`);
           const d = await r.json();
           if (r.ok && Array.isArray(d.prompts)) {
-            const mine = (d.prompts as PromptRow[]).filter((p) => {
-              if (p.targetUrl && wbUrlKey(p.targetUrl) === key) return true;
-              return Object.values(p.checks).some(
-                (c) => c?.citedUrl && wbUrlKey(c.citedUrl) === key
-              );
-            });
-            onPrompts(mine);
+            onPrompts(mineFrom(d.prompts as PromptRow[]));
           }
         } catch {
           /* keep polling */
@@ -1678,11 +1726,34 @@ function VisibilityStrip({
                 {msg}
               </p>
             )}
+
+            {/* Manual add — prompts entered here are mapped to THIS page */}
+            <div className="mb-2.5">
+              <textarea
+                value={addDraft}
+                onChange={(e) => setAddDraft(e.target.value)}
+                rows={2}
+                placeholder={
+                  "One prompt per line, phrased the way a buyer would ask an AI assistant — added prompts are mapped to this page."
+                }
+                className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-[11.5px] text-slate-800 focus:border-indigo-500 focus:outline-none resize-y"
+              />
+              <div className="flex items-center justify-end mt-1">
+                <button
+                  onClick={addManual}
+                  disabled={busy !== "" || !addDraft.trim()}
+                  className="rounded-md border border-indigo-300 bg-white px-2.5 py-1 text-[10.5px] font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                >
+                  {busy === "add" ? "Adding…" : "+ Add prompts"}
+                </button>
+              </div>
+            </div>
+
             {prompts.length === 0 ? (
               <p className="text-[11px]" style={{ color: "var(--text-3)" }}>
                 No prompts mapped to this URL yet. Generate a set from this page&apos;s scored
-                dimensions above, or assign prompts from the project&apos;s Prompt Set card.
-                Nothing shown here is ever estimated.
+                dimensions above, or add your own. Only this page&apos;s prompts feed its AI
+                rewrite, research, and simulation coverage. Nothing shown here is ever estimated.
               </p>
             ) : (
               <div className="space-y-2">
@@ -1707,7 +1778,16 @@ function VisibilityStrip({
                             <span className="text-[11.5px] font-semibold text-slate-700 min-w-0">
                               &ldquo;{p.prompt}&rdquo;
                             </span>
-                            <PromptEngineChips row={p} />
+                            <span className="flex items-center gap-1.5 flex-none">
+                              <PromptEngineChips row={p} />
+                              <button
+                                onClick={() => removePrompt(p.id)}
+                                title="Remove prompt"
+                                className="text-slate-300 hover:text-red-500 text-sm leading-none"
+                              >
+                                ×
+                              </button>
+                            </span>
                           </div>
                         ))}
                       </div>
@@ -1716,6 +1796,23 @@ function VisibilityStrip({
                 })}
               </div>
             )}
+
+            {/* Per-page truth footer: real stored checks only */}
+            <p className="mt-2 text-[10px]" style={{ color: "var(--text-3)" }}>
+              {prompts.length}/12 prompts on this page ·{" "}
+              {(() => {
+                const latest = prompts
+                  .flatMap((p) => Object.values(p.checks))
+                  .filter((c): c is NonNullable<typeof c> => Boolean(c));
+                if (latest.length === 0) return "no engine checks run yet";
+                const cost = latest.reduce((s, c) => s + (c.costUsd ?? 0), 0);
+                const errs = latest.filter((c) => c.status === "error").length;
+                return `latest per-engine checks: ${latest.length}${
+                  errs ? ` (${errs} errors)` : ""
+                } · real provider cost $${cost.toFixed(4)}`;
+              })()}{" "}
+              · each check is a paid live call
+            </p>
           </div>
           <div className="px-5 py-2 border-t border-slate-100 text-[10px]" style={{ color: "var(--text-3)" }}>
             {v
