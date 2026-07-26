@@ -134,7 +134,16 @@ The gaps named above are your PRIMARY search targets — turn each named missing
 ${
             visTargets.serp.length
               ? `The page ranks for these Google queries but is NOT cited in the AI Overview shown for them:
-${visTargets.serp.map((t) => `- "${t.keyword}" (${t.volume.toLocaleString()}/mo · position #${t.position})`).join("\n")}`
+${visTargets.serp
+                  .map(
+                    // Volume is omitted when the snapshot predates per-keyword
+                    // verification — never hand the model a grouped Google-Ads total.
+                    (t) =>
+                      `- "${t.keyword}" (${
+                        t.volume !== null ? `${t.volume.toLocaleString()}/mo · ` : ""
+                      }position #${t.position})`
+                  )
+                  .join("\n")}`
               : ""
           }${
             visTargets.prompts.length
