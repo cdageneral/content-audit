@@ -1314,12 +1314,14 @@ function VisibilityStrip({
               </span>
               <span className="text-sm font-bold truncate" style={{ color: "var(--text-1)" }}>{head.keyword}</span>
             </div>
-            <div>
-              <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>Volume</span>
-              <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
-                {head.volume.toLocaleString()}<span className="text-[10px] font-semibold text-slate-400">/mo</span>
-              </span>
-            </div>
+            {head.volume !== null && (
+              <div>
+                <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>Volume</span>
+                <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
+                  {head.volume.toLocaleString()}<span className="text-[10px] font-semibold text-slate-400">/mo</span>
+                </span>
+              </div>
+            )}
             <div>
               <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>Position</span>
               <span className="text-sm font-bold" style={{ color: "var(--text-1)" }}>
@@ -1372,7 +1374,7 @@ function VisibilityStrip({
               <thead>
                 <tr className="text-left text-[9.5px] uppercase tracking-wide text-slate-400">
                   <th className="py-1 pr-3 font-bold">Ranked keyword</th>
-                  <th className="py-1 pr-3 font-bold text-right">Vol/mo</th>
+                  {v.volumesVerified && <th className="py-1 pr-3 font-bold text-right">Vol/mo</th>}
                   <th className="py-1 pr-3 font-bold text-right">Pos</th>
                   <th className="py-1 pr-3 font-bold">AI Overview</th>
                   <th className="py-1 font-bold">PAA</th>
@@ -1385,7 +1387,11 @@ function VisibilityStrip({
                       {k.keyword}
                       {k.branded && <span className="ml-1.5 text-[9px] text-slate-400 font-bold uppercase">branded</span>}
                     </td>
-                    <td className="py-1.5 pr-3 text-right font-mono text-slate-600">{k.volume.toLocaleString()}</td>
+                    {v.volumesVerified && (
+                      <td className="py-1.5 pr-3 text-right font-mono text-slate-600">
+                        {k.volume === null ? "—" : k.volume.toLocaleString()}
+                      </td>
+                    )}
                     <td className="py-1.5 pr-3 text-right font-mono text-slate-600">
                       #{k.position}
                       <PosDelta k={k} />
@@ -1398,6 +1404,16 @@ function VisibilityStrip({
                 ))}
               </tbody>
             </table>
+            {!v.volumesVerified && (
+              // Grouped-volume guard: this snapshot's volumes are Google Ads
+              // cluster totals, not per-keyword figures. Say so instead of
+              // printing a number the numbers can't back up.
+              <p className="mt-2 text-[10.5px]" style={{ color: "var(--text-3)" }}>
+                Search volume hidden — this snapshot predates per-keyword volume verification.
+                Rankings and AI Overview status below are live SERP facts. Run &ldquo;Refresh SERP
+                data&rdquo; on the project page to restore verified volumes.
+              </p>
+            )}
           </div>
           )}
           <div className="px-5 py-2.5 border-t border-slate-100 bg-slate-50/60">
@@ -1484,7 +1500,7 @@ function TargetsCard({
                     Head term
                   </span>
                 )}
-                <span className="font-mono">{t.volume.toLocaleString()}/mo</span>
+                {t.volume !== null && <span className="font-mono">{t.volume.toLocaleString()}/mo</span>}
                 <span className="font-mono">
                   #{t.position}
                   <PosDelta k={t} />

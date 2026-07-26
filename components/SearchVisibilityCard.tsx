@@ -2,10 +2,15 @@
 
 // ─────────────────────────────────────────────────────────────
 //  Search Visibility card (hub) — verified AIO/PAA presence for
-//  the client's latest run, from Semrush SERP data. Headline
-//  counts + the "money list": keywords whose SERP shows an AI
-//  Overview the client is NOT cited in, sorted by volume.
-//  Every number here is verified SERP data — nothing modeled.
+//  the client's latest run, from live Google SERP data.
+//
+//  Summary counts only, by design (2026-07-26). The old ranked
+//  "biggest misses" table was removed: it displayed Google-Ads
+//  volumes, which group close variants so every variant inherits
+//  the cluster total (a 20/mo term read 1,000,000). That made
+//  both the numbers and the ranking wrong. Per-keyword detail —
+//  with volumes only when Semrush-verified — lives in the All
+//  Pages drawer and the Optimize workbench.
 // ─────────────────────────────────────────────────────────────
 
 import { useState } from "react";
@@ -21,8 +26,7 @@ export interface SerpRollupView {
   paaOwnedKws: number;
   questionsTotal: number;
   questionsCovered: number;
-  moneyList: { keyword: string; volume: number; position: number; pageUrl: string }[];
-  citedList: { keyword: string; volume: number; pageUrl: string }[];
+  citedList: { keyword: string; pageUrl: string }[];
 }
 
 export default function SearchVisibilityCard({
@@ -61,15 +65,6 @@ export default function SearchVisibilityCard({
       setBusy(false);
     }
   }
-
-  const shortUrl = (u: string) => {
-    try {
-      const p = new URL(u);
-      return p.pathname === "/" ? p.hostname : p.pathname;
-    } catch {
-      return u;
-    }
-  };
 
   return (
     <div className="anim-fade-up card p-5">
@@ -131,48 +126,12 @@ export default function SearchVisibilityCard({
             />
           </div>
 
-          {rollup.moneyList.length > 0 && (
-            <div className="mt-5">
-              <h3 className="text-sm font-semibold">
-                Biggest misses — AI Overview shows, you&apos;re not in it
-              </h3>
-              <p className="text-xs opacity-60 mt-0.5">
-                These searches display an AI Overview and a page of yours ranks — but isn&apos;t
-                cited in the answer. Highest search volume first.
-              </p>
-              <div className="mt-2 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-left opacity-60">
-                      <th className="py-1.5 pr-3 font-medium">Keyword</th>
-                      <th className="py-1.5 pr-3 font-medium">Vol/mo</th>
-                      <th className="py-1.5 pr-3 font-medium">Your rank</th>
-                      <th className="py-1.5 font-medium">Page</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {rollup.moneyList.slice(0, 10).map((m) => (
-                      <tr key={`${m.keyword}-${m.pageUrl}`} className="border-t border-black/5">
-                        <td className="py-1.5 pr-3">{m.keyword}</td>
-                        <td className="py-1.5 pr-3 tabular-nums">{m.volume.toLocaleString()}</td>
-                        <td className="py-1.5 pr-3 tabular-nums">#{m.position}</td>
-                        <td className="py-1.5 opacity-70 truncate max-w-[260px]" title={m.pageUrl}>
-                          {shortUrl(m.pageUrl)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
           {rollup.citedList.length > 0 && (
             <p className="text-xs opacity-60 mt-4">
               Already cited in AI Overviews for:{" "}
               {rollup.citedList
                 .slice(0, 5)
-                .map((c) => `${c.keyword} (${c.volume.toLocaleString()}/mo)`)
+                .map((c) => c.keyword)
                 .join(" · ")}
               {rollup.citedList.length > 5 ? ` · +${rollup.citedList.length - 5} more` : ""}
             </p>
