@@ -526,7 +526,7 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
             <thead>
               <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
                 {canPrune && (
-                  <th className="px-3 py-3 w-8">
+                  <th className="sticky left-0 z-20 bg-white px-3 py-3 w-10">
                     <input
                       type="checkbox"
                       title="Select all shown"
@@ -543,7 +543,16 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                     />
                   </th>
                 )}
-                <th className="text-left px-4 py-3">URL</th>
+                {/* URL pinned to the left edge and the action column pinned to
+                    the right so both survive horizontal scrolling — with ~13
+                    columns the Optimize/Review button used to fall off screen. */}
+                <th
+                  className={`sticky ${
+                    canPrune ? "left-10" : "left-0"
+                  } z-20 bg-white text-left px-4 py-3 shadow-[6px_0_10px_-6px_rgba(15,23,42,0.12)]`}
+                >
+                  URL
+                </th>
                 <th
                   className="text-left px-2 py-3"
                   title="Dot position = query type: 1 Recency · 2 Ranking · 3 Local · 4 Comparison"
@@ -565,21 +574,33 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                     AI SERP
                   </th>
                 )}
-                <th className="px-4 py-3">Grade</th>
-                {projectId && <th className="px-4 py-3" />}
+                <th className="px-3 py-3">Grade</th>
+                {projectId && (
+                  <th className="sticky right-0 z-20 bg-white border-l border-slate-200 px-3 py-3 shadow-[-6px_0_10px_-6px_rgba(15,23,42,0.15)]" />
+                )}
               </tr>
             </thead>
             <tbody>
-              {filtered.map((page) => (
+              {filtered.map((page) => {
+                const rowSelected = removeSet.has(page.url);
+                // Sticky cells sit on top of the scrolling ones, so they need
+                // an opaque background that tracks the row's own state.
+                const stickyBg = rowSelected
+                  ? "bg-amber-50 group-hover:bg-amber-100"
+                  : "bg-white group-hover:bg-slate-50";
+                return (
                 <tr
                   key={page.id}
                   onClick={() => setSelectedPage(page)}
-                  className={`border-b border-slate-200/70 hover:bg-slate-50 cursor-pointer transition-colors ${
-                    removeSet.has(page.url) ? "bg-amber-50/60" : ""
+                  className={`group border-b border-slate-200/70 cursor-pointer transition-colors ${
+                    rowSelected ? "bg-amber-50 hover:bg-amber-100" : "hover:bg-slate-50"
                   }`}
                 >
                   {canPrune && (
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <td
+                      className={`sticky left-0 z-10 ${stickyBg} px-3 py-3 transition-colors`}
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <input
                         type="checkbox"
                         title="Remove this page from the next run"
@@ -590,7 +611,12 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                       />
                     </td>
                   )}
-                  <td className="px-4 py-3 max-w-xs truncate text-slate-700 text-xs font-mono">
+                  <td
+                    className={`sticky ${
+                      canPrune ? "left-10" : "left-0"
+                    } z-10 ${stickyBg} px-4 py-3 max-w-[240px] truncate text-slate-700 text-xs font-mono transition-colors shadow-[6px_0_10px_-6px_rgba(15,23,42,0.12)]`}
+                    title={page.url}
+                  >
                     {page.url.replace(/^https?:\/\/[^/]+/, "")}
                   </td>
                   <td className="px-2 py-3">
@@ -646,11 +672,11 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                       </div>
                     )}
                   </td>
-                  <td className="px-4 py-3 font-bold" style={{ color: scoreColor(page.overallScore) }}>
+                  <td className="px-2.5 py-3 font-bold" style={{ color: scoreColor(page.overallScore) }}>
                     {page.overallScore}
                   </td>
                   {(["coreIntent", "edgeCases", "retrievable", "extractable", "citable", "reusable"] as ScoreDimension[]).map((d) => (
-                    <td key={d} className="px-4 py-3 text-slate-500 text-xs">
+                    <td key={d} className="px-2.5 py-3 text-slate-500 text-xs">
                       <ScoreChip score={page.scores[d]} />
                     </td>
                   ))}
@@ -659,13 +685,15 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                       <SerpChips summary={serpSummaries[page.url]} />
                     </td>
                   )}
-                  <td className="px-4 py-3">
+                  <td className="px-3 py-3">
                     <span className={`grade-${page.grade} rounded px-2 py-0.5 text-xs font-bold`}>
                       {page.grade}
                     </span>
                   </td>
                   {projectId && (
-                    <td className="px-4 py-3">
+                    <td
+                      className={`sticky right-0 z-10 ${stickyBg} border-l border-slate-200 px-3 py-3 transition-colors shadow-[-6px_0_10px_-6px_rgba(15,23,42,0.15)]`}
+                    >
                       <div
                         className="flex flex-col items-end gap-1"
                         onClick={(e) => e.stopPropagation()}
@@ -683,7 +711,8 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                     </td>
                   )}
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -737,7 +766,7 @@ function SortHeader({
   const active = field === current;
   return (
     <th
-      className="px-4 py-3 cursor-pointer hover:text-slate-700 transition-colors select-none"
+      className="px-2.5 py-3 cursor-pointer hover:text-slate-700 transition-colors select-none whitespace-nowrap"
       onClick={() => onSort(field)}
     >
       {label} {active ? (dir === "desc" ? "↓" : "↑") : ""}
@@ -798,7 +827,7 @@ function OptBadge({ baseline, st }: { baseline: number; st: PageOptimizeState })
   return (
     <span
       title={tip}
-      className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10.5px] font-semibold leading-none"
+      className="inline-flex items-center gap-1 whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10.5px] font-semibold leading-none"
     >
       {sim != null ? (
         <>
