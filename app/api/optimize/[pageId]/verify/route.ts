@@ -23,6 +23,7 @@ import {
   getSimulation,
   getPageForOptimize,
   insertVerification,
+  draftMatchesPage,
 } from "@/lib/db/drafts";
 import type { VerificationFidelity } from "@/lib/db/drafts";
 import { draftToCrawledPage } from "@/lib/optimize/transform";
@@ -54,7 +55,9 @@ export async function POST(req: NextRequest, { params }: Params) {
       getSimulation(simulationId),
       getPageForOptimize(params.pageId),
     ]);
-    if (!draft || draft.pageId !== params.pageId || !bundle) {
+    // URL-lineage check (re-audit safe): drafts keep their original page id
+    // while every new run mints new page rows for the same URL.
+    if (!draft || !bundle || !draftMatchesPage(draft, bundle)) {
       return NextResponse.json({ error: "Draft or page not found" }, { status: 404 });
     }
     if (!simulation || simulation.draftId !== draftId) {
