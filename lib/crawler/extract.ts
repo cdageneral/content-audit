@@ -181,19 +181,57 @@ function parseHtml(
   };
 }
 
-function extractCleanText($: cheerio.CheerioAPI): string {
-  // Get main content area if possible
-  const main =
-    $("main, article, [role='main'], .content, #content, .post-content, .entry-content")
-      .first()
-      .text() ||
-    $("body").text();
+// Containers that usually wrap a page's main copy. Ordered loosely by how
+// trustworthy each is; `.content` is included because many CMS themes use it,
+// but it is also the most likely to appear dozens of times on one page.
+const MAIN_SELECTORS =
+  "main, article, [role='main'], #content, .post-content, .entry-content, .content";
 
-  return main
-    .replace(/\s+/g, " ")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim()
-    .slice(0, 100_000); // Cap at 100k chars before scoring
+/**
+ * Share of the page's total body text a candidate container must hold before
+ * we trust it as "the main content". Below this we keep the whole body.
+ */
+const MAIN_COVERAGE_MIN = 0.6;
+
+const squash = (s: string) => s.replace(/\s+/g, " ").trim();
+const wordsIn = (s: string) => (s ? s.split(/\s+/).filter(Boolean).length : 0);
+
+/**
+ * Pull the page's readable copy.
+ *
+ * Historically this took `.first()` match of the selector list above, which
+ * silently truncated pages that use a generic wrapper class many times over.
+ * Proven 2026-07-26 on usbank.com/bank-accounts/checking-accounts/debit-cards.html:
+ * no <main>/<article>/[role=main] anywhere, 41 separate `div.content` blocks,
+ * and the largest held 136 of the page's 1,462 words — so the stored body copy
+ * was a stray widget fragment and every score for that page was computed
+ * against ~9% of the real content.
+ *
+ * Now: take the LARGEST candidate container, and only use it if it actually
+ * covers most of the body. Otherwise fall back to the full body (nav, header,
+ * footer, scripts and ad/menu chrome are already stripped by the caller), which
+ * may carry a little extra boilerplate but never drops the page's real copy.
+ */
+function extractCleanText($: cheerio.CheerioAPI): string {
+  const bodyText = squash($("body").text());
+  const bodyWords = wordsIn(bodyText);
+
+  let best = "";
+  let bestWords = 0;
+  $(MAIN_SELECTORS).each((_, el) => {
+    const text = squash($(el).text());
+    const n = wordsIn(text);
+    if (n > bestWords) {
+      best = text;
+      bestWords = n;
+    }
+  });
+
+  const useCandidate =
+    bestWords > 0 && (bodyWords === 0 || bestWords / bodyWords >= MAIN_COVERAGE_MIN);
+  const chosen = useCandidate ? best : bodyText;
+
+  return chosen.replace(/\n{3,}/g, "\n\n").slice(0, 100_000); // cap before scoring
 }
 
 function extractMetadata(
