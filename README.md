@@ -1,4 +1,4 @@
-# Meridian
+# Prism Optimizer
 
 Score every page on your website for **LLM readiness** across 8 dimensions — deployed on Vercel, powered by Claude.
 
