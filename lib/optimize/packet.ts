@@ -345,18 +345,6 @@ function buildDocument(input: BuildInput): Document {
   );
   for (const p of markdownToParagraphs(draft.bodyMd)) children.push(p);
 
-  // ── Methodology ─────────────────────────────────────────────
-  children.push(
-    spacer(),
-    sectionHeading("Methodology"),
-    para(
-      simulation
-        ? `Simulated with the production scoring engine: model ${simulation.modelVersion}, prompt ${simulation.promptVersion}, temperature 0, baseline run weights. Content fingerprint: ${simulation.contentHash.slice(0, 16)}…. Simulations are deterministic: publishing this content unchanged reproduces the simulated scores on the next audit of this URL.`
-        : `Baseline audit model: ${baseline?.modelVersion ?? "n/a"}.`,
-      { color: MUTED }
-    )
-  );
-
   return new Document({
     styles: {
       default: {
