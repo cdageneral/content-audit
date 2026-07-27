@@ -214,17 +214,18 @@ function Stat({
     // The explanation lives behind a click-to-open ⓘ rather than a native
     // title tooltip: these counts are easy to misread (each is acquired vs
     // triggered), and a hover-only hint is invisible on touch.
-    <div className="rounded-lg border border-black/10 p-3">
-      <div className="text-lg font-semibold tabular-nums" style={{ color }}>
+    <div className="relative rounded-lg border border-black/10 p-3">
+      {/* ⓘ pinned to the card's upper-right. Deliberately NOT inside the
+          label row: the label carries opacity-60, and an opacity-reduced
+          ancestor makes the whole popover translucent (page text bleeds
+          through it). */}
+      <span className="absolute top-2 right-2">
+        <InfoTip title={label} text={hint} />
+      </span>
+      <div className="text-lg font-semibold tabular-nums pr-6" style={{ color }}>
         {value}
       </div>
-      {/* opacity stays on the label TEXT, never on the row: the InfoTip
-          popover is a child here, and an opacity-reduced ancestor makes the
-          whole tooltip translucent (content behind it bleeds through). */}
-      <div className="text-xs mt-0.5 flex items-center gap-1.5">
-        <span className="opacity-60">{label}</span>
-        <InfoTip title={label} text={hint} />
-      </div>
+      <div className="text-xs opacity-60 mt-0.5">{label}</div>
     </div>
   );
 }
