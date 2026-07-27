@@ -282,8 +282,15 @@ export default async function ProjectHubPage({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
-      {/* ── Header ─────────────────────────────────────────── */}
-      <div className="anim-fade-up flex items-start justify-between gap-4 flex-wrap">
+      {/* ── Header ─────────────────────────────────────────────
+          `relative z-30` is LOAD-BEARING. Every card below carries
+          .anim-fade-up, whose fill-mode:both leaves a permanent transform —
+          which creates a stacking context. Without a z-index here, the header
+          paints under those later siblings and any popover opened from it (the
+          AI-crawler tile, the score/grade ⓘ tips) is half-hidden behind the
+          Search Visibility card. Same transform trap as InfoTip's dismissal
+          bug; see components/InfoTip.tsx. */}
+      <div className="anim-fade-up relative z-30 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <Link href="/" className="text-xs hover:underline" style={{ color: "var(--text-3)" }}>
