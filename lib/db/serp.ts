@@ -290,15 +290,30 @@ export async function findMonthlySnapshot(
 export interface SerpRollup {
   fetchedAt: string;
   database: string;
-  pagesWithData: number;
-  pagesTotal: number;
-  // volume-weighted counts across non-branded keywords
+  /** URLs where at least one non-branded keyword triggers an AIO or PAA box. */
+  urlsWithFeatures: number;
+  /** URLs that have a stored snapshot in this run (features or not). */
+  urlsWithData: number;
+  /** AI Overviews triggered across non-branded ranked keywords. */
   aioTriggeredKws: number;
+  /** …of which the AI Overview cites one of the client's URLs. */
   aioCitedKws: number;
-  paaPresentKws: number;
-  paaOwnedKws: number;
-  questionsTotal: number;
-  questionsCovered: number;
+  /**
+   * Distinct People-Also-Ask questions captured from LIVE SERP scrapes,
+   * deduped by question text.
+   *
+   * Deliberately question-level, not keyword-level (2026-07-26). PAA
+   * ownership can only be determined from a live scrape — DataForSEO's bulk
+   * ranked-keywords endpoint returns actual result elements only for
+   * organic/paid/featured_snippet/local_pack, so it can never say who answers
+   * a PAA box. Counting boxes from the bulk flag while sourcing owners from
+   * the live scrape mixed a complete denominator with a partial numerator and
+   * structurally understated ownership. Both numbers now come from the same
+   * verified set.
+   */
+  paaQuestionsTotal: number;
+  /** …of which one of the client's URLs is the named answer source. */
+  paaQuestionsOwned: number;
   /**
    * Keywords whose AI Overview already cites a page of the client's — name
    * only. No volume figure: see the volume-honesty note on getSerpRollup.
@@ -334,11 +349,36 @@ export async function getSerpRollup(jobId: string): Promise<SerpRollup | null> {
            paa_present, paa_owned, branded
     FROM serp_keywords WHERE snapshot_id = ANY(${snapIds})
   `;
-  const qs = await sql`
-    SELECT covered FROM serp_questions WHERE snapshot_id = ANY(${snapIds})
-  `;
+  // PAA questions actually captured from live SERPs (feature 21), with the
+  // is_client flag DataForSEO's answer source resolved to.
+  const paaOcc = await sql`
+    SELECT title, is_client FROM serp_occupants
+    WHERE snapshot_id = ANY(${snapIds}) AND feature = 21
+  `.catch(() => [] as Record<string, unknown>[]);
 
   const nonBranded = kws.filter((k) => !k.branded);
+
+  // Dedupe by question text — the same PAA question surfaces on several
+  // keywords and pages. Owned when ANY captured instance names a client URL.
+  const paaByQuestion = new Map<string, boolean>();
+  for (const o of paaOcc) {
+    const q = String(o.title ?? "").trim().toLowerCase();
+    if (!q) continue;
+    paaByQuestion.set(q, (paaByQuestion.get(q) ?? false) || Boolean(o.is_client));
+  }
+  let paaQuestionsOwned = 0;
+  paaByQuestion.forEach((owned) => {
+    if (owned) paaQuestionsOwned++;
+  });
+
+  // URLs with a SERP feature in play: at least one non-branded keyword that
+  // triggers an AI Overview or shows a PAA box.
+  const featureUrls = new Set<string>();
+  for (const k of nonBranded) {
+    if (!k.aio_triggered && !k.paa_present) continue;
+    const u = urlBySnap.get(k.snapshot_id as string);
+    if (u) featureUrls.add(u.toLowerCase());
+  }
   // Cited-for list: alphabetical, not volume-ranked — a volume sort would
   // silently reintroduce the grouped-volume ordering bug.
   const citedList = nonBranded
@@ -353,14 +393,12 @@ export async function getSerpRollup(jobId: string): Promise<SerpRollup | null> {
   return {
     fetchedAt: String(snaps[0].fetched_at),
     database: String(snaps[0].database),
-    pagesWithData: snaps.length,
-    pagesTotal: snaps.length,
+    urlsWithFeatures: featureUrls.size,
+    urlsWithData: snaps.length,
     aioTriggeredKws: nonBranded.filter((k) => k.aio_triggered).length,
     aioCitedKws: nonBranded.filter((k) => k.aio_cited).length,
-    paaPresentKws: nonBranded.filter((k) => k.paa_present).length,
-    paaOwnedKws: nonBranded.filter((k) => k.paa_owned).length,
-    questionsTotal: qs.length,
-    questionsCovered: qs.filter((q) => q.covered).length,
+    paaQuestionsTotal: paaByQuestion.size,
+    paaQuestionsOwned,
     citedList,
   };
 }
