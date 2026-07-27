@@ -58,9 +58,7 @@ export default async function OptimizePage({
     getDraftsByUrl(params.id, bundle.page.url).catch(() => []),
     getSimulationsByUrl(params.id, bundle.page.url).catch(() => []),
     // Stored SERP snapshot read only — no provider calls on page load.
-    // Project-scoped so stored keyword prefs (head-term override, supporting
-    // selection) apply.
-    getPageVisibility(bundle.page.url, params.id).catch(() => null),
+    getPageVisibility(bundle.page.url).catch(() => null),
     // Prompt Set rows matched to this URL (assigned or cited) — stored data only.
     getPromptRowsForUrl(params.id, bundle.page.url).catch(() => []),
   ]);
