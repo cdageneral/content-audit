@@ -203,10 +203,10 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   const [research, setResearch] = useState<Partial<Record<ScoreDimension, ResearchState>>>({});
   const [checkedSug, setCheckedSug] = useState<Record<string, boolean>>({});
 
-  // Live copies of the URL-level scorecard data — the strip mutates these
-  // after prompt generation, per-page check runs, and keyword-pref saves
-  // (each handler re-renders from the server's validated response).
-  const [visState, setVisState] = useState<PageVisibility | null>(props.visibility);
+  // The URL-level scorecard is read-only stored SERP data; the prompt rows
+  // below it are live (generation / per-page check runs re-render from the
+  // server's validated response).
+  const visState: PageVisibility | null = props.visibility;
   const [promptRows, setPromptRows] = useState<PromptRow[]>(props.promptVisibility);
 
   // ── Optimization targets (verified search-visibility data) ──
@@ -618,8 +618,8 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
         </div>
       )}
 
-      {/* Search & AI Visibility — the per-URL scorecard: head term (with
-          override), supporting keywords, AIO/PAA status, and this page's
+      {/* Search & AI Visibility — the per-URL scorecard: head term,
+          supporting keywords, AIO/PAA status, and this page's
           dimension-mapped prompt set. All verified stored data; the only
           provider calls are the explicit Generate / Run checks buttons. */}
       <VisibilityStrip
@@ -629,7 +629,6 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
         visibility={visState}
         prompts={promptRows}
         promptChecksConfigured={props.promptChecksConfigured}
-        onVisibility={setVisState}
         onPrompts={setPromptRows}
         open={visOpen}
         onToggle={() => setVisOpen((o) => !o)}
@@ -1345,7 +1344,6 @@ function VisibilityStrip({
   visibility,
   prompts,
   promptChecksConfigured,
-  onVisibility,
   onPrompts,
   open,
   onToggle,
@@ -1356,12 +1354,11 @@ function VisibilityStrip({
   visibility: PageVisibility | null;
   prompts: PromptRow[];
   promptChecksConfigured: boolean;
-  onVisibility: (v: PageVisibility) => void;
   onPrompts: (rows: PromptRow[]) => void;
   open: boolean;
   onToggle: () => void;
 }) {
-  const [busy, setBusy] = useState<"" | "gen" | "run" | "prefs" | "add">("");
+  const [busy, setBusy] = useState<"" | "gen" | "run" | "add">("");
   const [msg, setMsg] = useState<string | null>(null);
   const [addDraft, setAddDraft] = useState("");
   const [secs, setSecs] = useState(0);
@@ -1371,45 +1368,6 @@ function VisibilityStrip({
     const id = setInterval(() => setSecs((s) => s + 1), 1000);
     return () => clearInterval(id);
   }, [busy]);
-
-  async function savePrefs(headTerm: string | null, supporting: string[] | null) {
-    setBusy("prefs");
-    setMsg(null);
-    try {
-      const res = await fetch(`/api/optimize/${pageId}/keyword-prefs`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ headTerm, supporting }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
-      if (data.visibility) onVisibility(data.visibility as PageVisibility);
-    } catch (err) {
-      setMsg(err instanceof Error ? err.message : "Failed to save keyword assignment");
-    } finally {
-      setBusy("");
-    }
-  }
-
-  function currentSupporting(): string[] {
-    return (visibility?.keywords ?? []).filter((k) => k.supporting).map((k) => k.keyword);
-  }
-
-  function setHead(keyword: string) {
-    // "" = back to auto. Supporting selection is re-sent minus the new head.
-    const head = keyword || null;
-    const supporting = currentSupporting().filter((s) => s !== head);
-    void savePrefs(head, supporting.length ? supporting : null);
-  }
-
-  function toggleSupporting(keyword: string, on: boolean) {
-    const set = new Set(currentSupporting());
-    if (on) set.add(keyword);
-    else set.delete(keyword);
-    const head =
-      visibility?.headTermSource === "override" ? visibility.headTerm?.keyword ?? null : null;
-    void savePrefs(head, Array.from(set));
-  }
 
   /**
    * Keep only rows that belong to THIS page from a full project fetch:
@@ -1555,9 +1513,6 @@ function VisibilityStrip({
             <div className="min-w-0">
               <span className="block text-[10px] uppercase tracking-wide" style={{ color: "var(--text-3)" }}>
                 Head term{head.branded ? " (branded)" : ""}
-                {v!.headTermSource === "override" && (
-                  <span className="ml-1 normal-case font-semibold text-indigo-500">· assigned</span>
-                )}
               </span>
               <span className="text-sm font-bold truncate" style={{ color: "var(--text-1)" }}>{head.keyword}</span>
             </div>
@@ -1621,9 +1576,6 @@ function VisibilityStrip({
               <thead>
                 <tr className="text-left text-[9.5px] uppercase tracking-wide text-slate-400">
                   <th className="py-1 pr-3 font-bold">Ranked keyword</th>
-                  <th className="py-1 pr-3 font-bold" title="Head = the search term matching this page's core intent (one per page). Supporting = the page's subtopic terms. Both feed Optimization Targets.">
-                    Role
-                  </th>
                   {v.volumesVerified && <th className="py-1 pr-3 font-bold text-right">Vol/mo</th>}
                   <th className="py-1 pr-3 font-bold text-right">Pos</th>
                   <th className="py-1 pr-3 font-bold">AI Overview</th>
@@ -1632,35 +1584,11 @@ function VisibilityStrip({
               </thead>
               <tbody>
                 {v.keywords.map((k) => {
-                  const isHead = head !== null && k.keyword === head.keyword;
                   return (
                   <tr key={k.keyword} className="border-t border-slate-100">
                     <td className="py-1.5 pr-3 font-semibold text-slate-700">
                       {k.keyword}
                       {k.branded && <span className="ml-1.5 text-[9px] text-slate-400 font-bold uppercase">branded</span>}
-                    </td>
-                    <td className="py-1.5 pr-3 whitespace-nowrap">
-                      <label className="inline-flex items-center gap-1 mr-2.5 cursor-pointer" title="Make this the page's head term">
-                        <input
-                          type="radio"
-                          name="wb-head-term"
-                          checked={isHead}
-                          disabled={busy !== ""}
-                          onChange={() => setHead(k.keyword)}
-                          className="accent-indigo-600"
-                        />
-                        <span className={`text-[9.5px] font-bold uppercase ${isHead ? "text-indigo-600" : "text-slate-400"}`}>head</span>
-                      </label>
-                      <label className="inline-flex items-center gap-1 cursor-pointer" title="Count this as a supporting keyword for the page">
-                        <input
-                          type="checkbox"
-                          checked={k.supporting}
-                          disabled={busy !== "" || isHead}
-                          onChange={(e) => toggleSupporting(k.keyword, e.target.checked)}
-                          className="accent-indigo-600"
-                        />
-                        <span className={`text-[9.5px] font-bold uppercase ${k.supporting ? "text-teal-600" : "text-slate-400"}`}>support</span>
-                      </label>
                     </td>
                     {v.volumesVerified && (
                       <td className="py-1.5 pr-3 text-right font-mono text-slate-600">
@@ -1681,7 +1609,8 @@ function VisibilityStrip({
               </tbody>
             </table>
             <p className="mt-2 text-[10px]" style={{ color: "var(--text-3)" }}>
-              Head/support assignments save per URL and survive re-audits{v.headTermSource === "auto" ? " · head term currently auto-derived (top non-branded keyword)" : ""}.
+              Head term = the top non-branded ranked keyword for this URL; the other
+              non-branded terms count as supporting. Both feed Optimization Targets.
             </p>
             {!v.volumesVerified && (
               // Grouped-volume guard: this snapshot's volumes are Google Ads
