@@ -19,13 +19,12 @@ import { useRouter } from "next/navigation";
 export interface SerpRollupView {
   fetchedAt: string;
   database: string;
-  pagesWithData: number;
+  urlsWithFeatures: number;
+  urlsWithData: number;
   aioTriggeredKws: number;
   aioCitedKws: number;
-  paaPresentKws: number;
-  paaOwnedKws: number;
-  questionsTotal: number;
-  questionsCovered: number;
+  paaQuestionsTotal: number;
+  paaQuestionsOwned: number;
   citedList: { keyword: string; pageUrl: string }[];
 }
 
@@ -45,11 +44,14 @@ export default function SearchVisibilityCard({
   projectId,
   rollup,
   promptSummary,
+  crawledUrls,
   configured,
 }: {
   projectId: string;
   rollup: SerpRollupView | null;
   promptSummary: PromptSummaryView | null;
+  /** Client pages crawled in the latest run — the All Pages list below. */
+  crawledUrls: number;
   configured: boolean;
 }) {
   const router = useRouter();
@@ -103,31 +105,33 @@ export default function SearchVisibilityCard({
 
       {rollup && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-4">
+          {/* Every card reads acquired / triggered, scoped to this project's
+              URLs (2026-07-26). Question coverage was removed — it mixed a
+              live-SERP fact with a heading-match content check, which is the
+              workbench's job, not a visibility scoreboard's. */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
             <Stat
               label="AI Overview citations"
               value={`${rollup.aioCitedKws} / ${rollup.aioTriggeredKws}`}
-              hint="Keywords with an AI Overview where a page of yours is cited, of all your ranked keywords that trigger one (branded excluded)"
+              hint="AI Overviews citing one of your URLs, of all AI Overviews triggered by your ranked keywords (branded excluded)"
               tone={rollup.aioCitedKws > 0 ? "good" : rollup.aioTriggeredKws > 0 ? "warn" : "flat"}
             />
             <Stat
               label="PAA answers owned"
-              value={`${rollup.paaOwnedKws} / ${rollup.paaPresentKws}`}
-              hint="Keywords where a page of yours is the People-Also-Ask answer source, of those showing a PAA box"
-              tone={rollup.paaOwnedKws > 0 ? "good" : rollup.paaPresentKws > 0 ? "warn" : "flat"}
-            />
-            <Stat
-              label="Question coverage"
               value={
-                rollup.questionsTotal > 0
-                  ? `${rollup.questionsCovered} / ${rollup.questionsTotal}`
+                rollup.paaQuestionsTotal > 0
+                  ? `${rollup.paaQuestionsOwned} / ${rollup.paaQuestionsTotal}`
                   : "—"
               }
-              hint="Question-form queries around each page's primary keyword that the page already ranks for or answers in a heading"
+              hint={
+                rollup.paaQuestionsTotal > 0
+                  ? "People-Also-Ask questions where Google names one of your URLs as the answer source, of all PAA questions captured from live SERP scrapes of your pages' top ranked keywords"
+                  : "No PAA questions captured yet — run Refresh SERP data to scrape live People-Also-Ask boxes for your ranked keywords"
+              }
               tone={
-                rollup.questionsTotal === 0
+                rollup.paaQuestionsTotal === 0
                   ? "flat"
-                  : rollup.questionsCovered * 2 >= rollup.questionsTotal
+                  : rollup.paaQuestionsOwned > 0
                   ? "good"
                   : "warn"
               }
@@ -157,10 +161,16 @@ export default function SearchVisibilityCard({
               }
             />
             <Stat
-              label="Pages with SERP data"
-              value={String(rollup.pagesWithData)}
-              hint={`Google ${rollup.database.toUpperCase()} database`}
-              tone="flat"
+              label="URLs with SERP features"
+              value={
+                crawledUrls > 0 ? `${rollup.urlsWithFeatures} / ${crawledUrls}` : "—"
+              }
+              hint={`Pages with at least one ranked keyword that triggers an AI Overview or a People-Also-Ask box, of the ${crawledUrls} crawled pages listed below. Google ${rollup.database.toUpperCase()} database${
+                rollup.urlsWithData < crawledUrls
+                  ? ` · ${crawledUrls - rollup.urlsWithData} page(s) have no SERP snapshot yet`
+                  : ""
+              }`}
+              tone={rollup.urlsWithFeatures > 0 ? "flat" : "warn"}
             />
           </div>
 
