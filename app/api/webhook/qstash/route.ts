@@ -635,7 +635,12 @@ const SERP_KEYWORDS_PER_URL = parseInt(process.env.SERP_KEYWORDS_PER_URL ?? "25"
 // Live Google SERP scrapes per page (DataForSEO): primary keyword + the
 // highest-volume AIO-triggered keywords. Each scrape yields the AI Overview
 // citation list, verbatim PAA questions with sources, and the organic top.
-const SERP_LIVE_PER_PAGE = parseInt(process.env.SERP_LIVE_PER_PAGE ?? "3", 10);
+// Raised 3 → 6 (2026-07-26, Wayne-approved): PAA ownership can ONLY be
+// resolved from a live scrape — DataForSEO's bulk ranked-keywords endpoint
+// returns result elements only for organic/paid/featured_snippet/local_pack —
+// so this number is the ceiling on how much of the PAA layer is measurable.
+// Each extra keyword is a paid live SERP call; SERP_COST_CAP_USD still guards.
+const SERP_LIVE_PER_PAGE = parseInt(process.env.SERP_LIVE_PER_PAGE ?? "6", 10);
 // Per-run spend ceiling in USD for DataForSEO (real cost from API responses).
 const SERP_COST_CAP_USD = parseFloat(process.env.SERP_COST_CAP_USD ?? "10");
 const SERP_QUESTIONS_PER_PAGE = parseInt(process.env.SERP_QUESTIONS_PER_PAGE ?? "15", 10);
