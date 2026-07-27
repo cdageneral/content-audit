@@ -451,6 +451,7 @@ export default async function ProjectHubPage({
           projectId={params.id}
           rollup={serpRollup}
           promptSummary={promptSummary}
+          crawledUrls={clientScores.length}
           configured={serpEnabled}
         />
       )}
