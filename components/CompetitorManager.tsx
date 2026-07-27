@@ -171,7 +171,7 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
                 <div className="rounded-lg px-3 py-2.5 text-xs anim-fade-in flex items-start gap-2"
                   style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.3)', color: '#b45309' }}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-px"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-                  <span><strong>Saved.</strong> Re-run the scan (<strong>Run All</strong> on the project) to score the updated competitor set.</span>
+                  <span><strong>Saved.</strong> Re-run the scan (<strong>Run Audit</strong> on the project) to score the updated competitor set.</span>
                 </div>
               )}
 
