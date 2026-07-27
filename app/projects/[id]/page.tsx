@@ -17,6 +17,7 @@ import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
 import EditAuditSourceButton from "@/components/EditAuditSourceButton";
 import SearchVisibilityCard from "@/components/SearchVisibilityCard";
+import AiCrawlerTile from "@/components/AiCrawlerTile";
 import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
 import { getPromptRows } from "@/lib/db/prompts";
 import { serpConfigured } from "@/lib/serp/semrush";
@@ -195,7 +196,6 @@ export default async function ProjectHubPage({
   `.catch(() => [] as Record<string, unknown>[]);
   const aiAccess = (aiAccessRows[0]?.ai_access ?? null) as AiAccessData | null;
   const blockedBots = aiAccess?.bots.filter((b) => b.status === "blocked") ?? [];
-  const partialBots = aiAccess?.bots.filter((b) => b.status === "partial") ?? [];
 
   // ── Search visibility (AIO/PAA) — latest client run with SERP data ──
   // Lazy tables: a DB that has never run SERP detection just yields null.
@@ -324,7 +324,7 @@ export default async function ProjectHubPage({
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center justify-end gap-3 flex-wrap">
           {project.latestScore != null && (
             <div className="text-center px-5 py-3 rounded-xl" style={{ background: "var(--bg-1)", border: "1px solid var(--border)" }}>
               <div className="text-3xl font-bold" style={{ color: scoreColor(project.latestScore) }}>
@@ -353,6 +353,7 @@ export default async function ProjectHubPage({
               </div>
             </div>
           )}
+          {aiAccess && <AiCrawlerTile data={aiAccess} />}
           <div className="flex flex-col items-end gap-1.5">
             <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
             {/* Download Assessment moved to the global top nav (see NavActions). */}
@@ -370,76 +371,36 @@ export default async function ProjectHubPage({
         <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />
       )}
 
-      {/* ── AI crawler access (robots.txt + llms.txt) ─────── */}
-      {aiAccess && (
+      {/* ── AI crawler access — BLOCKED only ───────────────
+          The all-allowed and partially-restricted states live in the compact
+          <AiCrawlerTile> in the header (click to expand). A hard block keeps
+          the full-width bar: it is the highest-value finding the audit
+          produces, because no content fix moves the needle until the crawler
+          is let in. Don't collapse this one to save space. */}
+      {aiAccess && blockedBots.length > 0 && (
         <div
-          className="anim-fade-up card p-5"
-          style={
-            blockedBots.length
-              ? { border: "1px solid rgba(220,38,38,0.35)", background: "rgba(239,68,68,0.04)" }
-              : partialBots.length
-              ? { border: "1px solid rgba(217,119,6,0.35)", background: "rgba(245,158,11,0.04)" }
-              : undefined
-          }
+          className="anim-fade-up card px-5 py-3.5"
+          style={{ border: "1px solid rgba(220,38,38,0.35)", background: "rgba(239,68,68,0.04)" }}
         >
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="min-w-[240px]">
-              <p className="section-label mb-1 flex items-center gap-1.5">
-                AI Crawler Access
-                <InfoTip
-                  title="AI Crawler Access"
-                  text="Checked from your site's robots.txt at the start of the last audit run: can the crawlers behind ChatGPT, Claude, Perplexity, and Google's AI training reach your pages? A blocked crawler cannot fetch your content at answer time — no content fix changes that until access is opened. llms.txt is an emerging standard file that gives AI systems a curated map of your site."
-                />
-              </p>
-              <p className="text-sm" style={{ color: blockedBots.length ? "#dc2626" : "var(--text-2)" }}>
-                {blockedBots.length ? (
-                  <>
-                    <span className="font-semibold">
-                      Your site blocks {blockedBots.length} of {aiAccess.bots.length} AI crawlers
-                    </span>{" "}
-                    in robots.txt — those engines can&apos;t fetch your pages at all.
-                  </>
-                ) : partialBots.length ? (
-                  <>
-                    <span className="font-semibold" style={{ color: "#d97706" }}>
-                      {partialBots.length} AI crawler{partialBots.length !== 1 ? "s are" : " is"} partially restricted
-                    </span>{" "}
-                    — some sections are invisible to those engines.
-                  </>
-                ) : (
-                  <>All {aiAccess.bots.length} major AI crawlers can access your site.</>
-                )}
-                {!aiAccess.robotsFound && " (No robots.txt found — crawlers are allowed by default.)"}
-              </p>
-            </div>
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <p className="text-sm" style={{ color: "#dc2626" }}>
+              <span className="font-semibold">
+                Your site blocks {blockedBots.length} of {aiAccess.bots.length} AI crawlers
+              </span>{" "}
+              in robots.txt — those engines can&apos;t fetch your pages at all. No content fix changes
+              that until access is opened.
+            </p>
             <div className="flex items-center gap-2 flex-wrap">
-              {aiAccess.bots.map((b) => (
+              {blockedBots.map((b) => (
                 <span
                   key={b.name}
                   title={b.sampleRule ? `robots.txt: ${b.sampleRule}` : `No restricting rule for ${b.name}`}
                   className="px-2.5 py-1 rounded-full text-xs font-semibold"
-                  style={
-                    b.status === "blocked"
-                      ? { background: "rgba(239,68,68,0.12)", color: "#dc2626", border: "1px solid rgba(239,68,68,0.3)" }
-                      : b.status === "partial"
-                      ? { background: "rgba(245,158,11,0.12)", color: "#b45309", border: "1px solid rgba(245,158,11,0.3)" }
-                      : { background: "rgba(16,185,129,0.10)", color: "#047857", border: "1px solid rgba(16,185,129,0.25)" }
-                  }
+                  style={{ background: "rgba(239,68,68,0.12)", color: "#dc2626", border: "1px solid rgba(239,68,68,0.3)" }}
                 >
-                  {b.name} {b.status === "blocked" ? "✕ blocked" : b.status === "partial" ? "◐ partial" : "✓"}
+                  {b.name} ✕ blocked
                 </span>
               ))}
-              <span
-                className="px-2.5 py-1 rounded-full text-xs font-semibold"
-                title={aiAccess.llmsTxtFound ? `${aiAccess.origin}/llms.txt exists` : "No llms.txt found — an emerging standard worth adding"}
-                style={
-                  aiAccess.llmsTxtFound
-                    ? { background: "rgba(16,185,129,0.10)", color: "#047857", border: "1px solid rgba(16,185,129,0.25)" }
-                    : { background: "var(--bg-2)", color: "var(--text-3)", border: "1px solid var(--border)" }
-                }
-              >
-                llms.txt {aiAccess.llmsTxtFound ? "✓ present" : "— missing"}
-              </span>
             </div>
           </div>
         </div>
