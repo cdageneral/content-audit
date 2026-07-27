@@ -3,7 +3,8 @@
 import { useState } from "react";
 import type { CompetitorConfig } from "@/lib/db/projects";
 import type { PageScore, ScoreDimension } from "@/lib/types";
-import { DIMENSION_LABELS } from "@/lib/types";
+import { DIMENSION_LABELS, DIMENSION_HINTS } from "@/lib/types";
+import InfoTip from "./InfoTip";
 import DimensionDrilldown from "./DimensionDrilldown";
 
 interface Props {
@@ -171,7 +172,14 @@ export default function CompetitorMatrix({
                 )}
                 <tr key={dim}>
                   <td style={{ color: "var(--text-2)", fontSize: 13 }}>
-                    {DIMENSION_LABELS[dim]}
+                    {/* InfoTip portals its popover to <body> — required here,
+                        because this table sits inside `card overflow-hidden`
+                        AND an `overflow-x-auto` scroller, either of which
+                        would clip an in-flow popover. */}
+                    <span className="inline-flex items-center gap-1.5">
+                      {DIMENSION_LABELS[dim]}
+                      <InfoTip title={DIMENSION_LABELS[dim]} text={DIMENSION_HINTS[dim]} />
+                    </span>
                   </td>
                   {siteAvgs.map((s, idx) => {
                     const score = s.dimAvgs[dim];
