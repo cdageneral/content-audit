@@ -1,187 +1,65 @@
+// ─────────────────────────────────────────────────────────────
+//  /projects/[id] — Overview (the guided "start here" surface).
+//  The old single-page hub was split into the left-rail sections
+//  (see layout.tsx). Overview keeps orientation + direction:
+//  score ring, setup checklist, fix-first queue, score trend and
+//  section tiles. The heavy surfaces live in their own routes:
+//  /pages, /visibility, /competitors, /optimize, /reports,
+//  /settings.
+// ─────────────────────────────────────────────────────────────
+
 import { notFound, redirect } from "next/navigation";
 import Link from "next/link";
 import { checkProjectAccess } from "@/lib/auth/access";
-import { getProjectDetail, refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
-import { getScoresByJob } from "@/lib/db/client";
+import { getProjectDetail } from "@/lib/db/projects";
 import { getProjectOptimizeStates } from "@/lib/db/drafts";
-import { enqueueScoreBatch } from "@/lib/queue/qstash";
-import { DEFAULT_WEIGHTS } from "@/lib/types";
-import type { DimensionScores } from "@/lib/types";
-import { neon } from "@neondatabase/serverless";
 import TrendChart from "@/components/TrendChart";
-import CompetitorMatrix from "@/components/CompetitorMatrix";
 import RunButton from "@/components/RunButton";
-import AuditResults from "@/components/AuditResults";
-import OptimizedSummary from "@/components/OptimizedSummary";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
-import EditAuditSourceButton from "@/components/EditAuditSourceButton";
-import SearchVisibilityCard from "@/components/SearchVisibilityCard";
 import AiCrawlerTile from "@/components/AiCrawlerTile";
 import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
 import { getPromptRows } from "@/lib/db/prompts";
 import { serpConfigured } from "@/lib/serp/semrush";
 import { dfsConfigured } from "@/lib/serp/dataforseo";
+import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
+import type { ScoreDimension } from "@/lib/types";
+import {
+  COMPETITOR_COLORS,
+  hubSql,
+  scoreColor,
+  gradeColor,
+  medianGrade,
+  computeQuickSummary,
+  getLatestScores,
+  buildOptimizedRows,
+  buildFixFirst,
+  getActiveJobs,
+  isStaleBaseline,
+} from "@/lib/hub";
 
 export const revalidate = 0;
 
-const COMPETITOR_COLORS = ["#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0284c7"];
-
-export default async function ProjectHubPage({
+export default async function ProjectOverviewPage({
   params,
 }: {
   params: { id: string };
 }) {
-  // Block the hub for anyone not in the project's company (no-op unless
-  // AUTH_ENFORCED). Not your company's project → back to the list.
   const gate = await checkProjectAccess(params.id);
   if (!gate.ok) redirect("/");
   const project = await getProjectDetail(params.id).catch(() => null);
   if (!project) return notFound();
 
-  // Load latest scores for client + each competitor.
-  // no-store: the Neon driver reads via fetch, which Next.js caches by default;
-  // without this the hub can render a stale snapshot (see lib/db/client.ts).
-  const sql = neon(process.env.DATABASE_URL!, { fetchOptions: { cache: "no-store" } });
-
-  // -- Self-heal: reconcile jobs stuck in 'scoring'/'crawling' against the
-  //    ACTUAL page_scores rows. Two failure modes are covered:
-  //      (a) fully scored but never flipped to 'done' (counter bug / a batch
-  //          that died right before its done-check) -> finalize now.
-  //      (b) a crawl-claim race left some pages un-dispatched: the last crawl
-  //          batch grabbed the 'scoring' lock and dispatched the pages then in
-  //          the DB while an earlier concurrent batch was still committing more
-  //          pages, so those late pages were never sent to a score_batch and
-  //          the job can never reach "fully scored" on its own -> re-dispatch
-  //          just the un-scored pages. The score webhook's row-count done-check
-  //          then finalizes the job when the last stragglers land.
-  //    Cheap: only touches this project's not-yet-final jobs.
-  const stuckJobs = await sql`
-    SELECT id, competitor_id, weights, updated_at
-    FROM audit_jobs
-    WHERE project_id = ${params.id} AND status IN ('scoring', 'crawling')
-  `.catch(() => [] as Record<string, unknown>[]);
-  for (const j of stuckJobs) {
-    const jobId = j.id as string;
-    const pageRows = await sql`SELECT id FROM audit_pages WHERE job_id = ${jobId}`.catch(() => [] as Record<string, unknown>[]);
-    if (pageRows.length === 0) continue; // nothing crawled yet — leave it alone
-    const scoredRows = await sql`SELECT page_id FROM page_scores WHERE job_id = ${jobId}`.catch(() => [] as Record<string, unknown>[]);
-    const scoredSet = new Set(scoredRows.map((r) => String(r.page_id)));
-    const unscored = pageRows.map((p) => String(p.id)).filter((id) => !scoredSet.has(id));
-
-    if (unscored.length === 0) {
-      // (a) fully scored — finalize and refresh the cached score.
-      await sql`
-        UPDATE audit_jobs SET status = 'done', completed_at = NOW()
-        WHERE id = ${jobId} AND status IN ('scoring', 'crawling')
-      `.catch(() => null);
-      if (j.competitor_id) {
-        await refreshCompetitorCache(String(j.competitor_id)).catch(() => null);
-      } else {
-        await refreshProjectCache(params.id).catch(() => null);
-      }
-    } else {
-      // (b) orphaned un-scored pages — re-dispatch them. Guard on updated_at so
-      // we don't re-enqueue on every render while a batch is still in flight.
-      const updatedAt = j.updated_at ? new Date(j.updated_at as string).getTime() : 0;
-      if (Date.now() - updatedAt > 90_000) {
-        const weights = { ...DEFAULT_WEIGHTS, ...((j.weights as object) ?? {}) } as DimensionScores;
-        for (let i = 0; i < unscored.length; i += 10) {
-          await enqueueScoreBatch({ jobId, pageIds: unscored.slice(i, i + 10), weights }).catch(() => null);
-        }
-        // Touch the job so the guard above suppresses duplicate dispatches
-        // until this batch has had time to land (or fail and be retried).
-        await sql`UPDATE audit_jobs SET updated_at = NOW() WHERE id = ${jobId}`.catch(() => null);
-      }
-    }
-  }
-
-  const latestJobs = await sql`
-    SELECT DISTINCT ON (COALESCE(competitor_id::text, 'client'))
-      id, competitor_id, completed_at, status
-    FROM audit_jobs
-    WHERE project_id = ${params.id} AND status = 'done'
-    ORDER BY COALESCE(competitor_id::text, 'client'), completed_at DESC
-  `.catch(() => []);
-
-  const latestScoresMap: Record<string, Awaited<ReturnType<typeof getScoresByJob>>> = {};
-  for (const job of latestJobs) {
-    const key = job.competitor_id ? String(job.competitor_id) : "client";
-    latestScoresMap[key] = await getScoresByJob(job.id as string).catch(() => []);
-  }
-
-  const clientScores = latestScoresMap["client"] ?? [];
-  const hasResults = clientScores.length > 0;
-
-  // Optimization state (saved drafts / simulated scores / verifications) for
-  // this project's URLs. Read-only + sandboxed — drives the row badges and the
-  // Optimized-pages summary; returns {} on any error so the hub still renders.
-  const optimizeStates = hasResults
-    ? await getProjectOptimizeStates(params.id)
-    : {};
-  const optimizedRows = clientScores
-    .filter((s) => optimizeStates[s.url])
-    .map((s) => {
-      const st = optimizeStates[s.url];
-      return {
-        url: s.url,
-        pageId: s.pageId,
-        baseline: s.overallScore,
-        simulated: st.simulatedOverall,
-        grade: st.simulatedGrade,
-        version: st.version,
-        draftCount: st.draftCount,
-        draftId: st.draftId,
-        simulationId: st.simulationId,
-        verified: st.verified,
-        verifiedMatched: st.verifiedMatched,
-      };
-    })
-    .sort((a, b) => {
-      const da = a.simulated != null ? a.simulated - a.baseline : -Infinity;
-      const db = b.simulated != null ? b.simulated - b.baseline : -Infinity;
-      return db - da;
-    });
-
-  // The CLIENT's latest done job. latestJobs[0] is NOT reliable here — the
-  // DISTINCT ON ordering sorts competitor jobs first, and the classify
-  // backfill button posts to /api/audit/[jobId]/classify with this id, so it
-  // must be the client job (previously it was only used as a React key).
-  const clientJobId = (latestJobs.find((j) => !j.competitor_id)?.id ?? latestJobs[0]?.id) as string;
-
-  // Stale-baseline check: score rows produced before the determinism deploy
-  // carry no content fingerprint (content_hash IS NULL). Optimizing against
-  // them is apples-to-oranges — simulations run on the CURRENT engine — so we
-  // surface a "re-run first" nudge until a fresh audit replaces them.
-  let staleBaseline = false;
-  if (clientJobId) {
-    const staleRows = await sql`
-      SELECT COUNT(*)::int AS n FROM page_scores
-      WHERE job_id = ${clientJobId}
-        AND content_hash IS NULL
-        AND model_version <> 'error'
-    `.catch(() => [] as Record<string, unknown>[]);
-    staleBaseline = ((staleRows[0]?.n as number) ?? 0) > 0;
-  }
-
-  // Flattened competitor pages for the "Competitors outperforming you" card.
-  const competitorPageEntries = project.competitors.flatMap((c) => {
-    const cs = latestScoresMap[c.id] ?? [];
-    return cs.map((p) => ({
-      competitorName: c.name,
-      color: COMPETITOR_COLORS[c.colorIndex],
-      url: p.url,
-      score: p.overallScore,
-      grade: p.grade,
-    }));
-  });
-
-  // Median letter grade across the client's audited pages.
+  const sql = hubSql();
+  const { latestScoresMap, clientScores, clientJobId, hasResults } = await getLatestScores(params.id);
+  const summary = hasResults ? computeQuickSummary(clientScores) : null;
   const clientMedianGrade = medianGrade(clientScores);
 
+  const optimizeStates = hasResults ? await getProjectOptimizeStates(params.id) : {};
+  const optimizedRows = buildOptimizedRows(clientScores, optimizeStates);
+  const staleBaseline = await isStaleBaseline(clientJobId);
+
   // ── AI-crawler access (latest check for the client site) ──
-  // Written by the run route at audit start; column is lazily created, so a
-  // DB that has never run the new code just yields an empty result here.
   type AiAccessData = {
     checkedAt: string;
     origin: string;
@@ -197,9 +75,7 @@ export default async function ProjectHubPage({
   const aiAccess = (aiAccessRows[0]?.ai_access ?? null) as AiAccessData | null;
   const blockedBots = aiAccess?.bots.filter((b) => b.status === "blocked") ?? [];
 
-  // ── Search visibility (AIO/PAA) — latest client run with SERP data ──
-  // Lazy tables: a DB that has never run SERP detection just yields null.
-  // Stored data still renders even if the key was later removed.
+  // ── Search visibility roll-up + per-page facts ──
   const serpEnabled = serpConfigured() || dfsConfigured();
   let serpRollup = null as Awaited<ReturnType<typeof getSerpRollup>>;
   let serpSummaries: Awaited<ReturnType<typeof getSerpPageSummaries>> | undefined;
@@ -209,87 +85,87 @@ export default async function ProjectHubPage({
     serpSummaries = await getSerpPageSummaries(serpJobId).catch(() => undefined);
   }
 
-  // ── LLM Prompt Set — roll-up only (URL-level model, 2026-07-26): prompt
-  // MANAGEMENT lives on each page's Optimize workbench; the hub keeps just
-  // the summary stat in the Search Visibility card row.
+  // LLM prompts roll-up (management lives on the workbench — URL-level model).
   const promptRows = await getPromptRows(params.id).catch(() => []);
-  // Roll-up for the Search Visibility card row (real stored checks only):
-  // a prompt is "checked" once any engine returned a real answer, "cited"
-  // when at least one of those answers links the client's site.
   const promptSummary = (() => {
     if (promptRows.length === 0) return null;
     let checked = 0;
     let cited = 0;
-    let brandOnly = 0;
     for (const r of promptRows) {
       const ok = Object.values(r.checks).filter((c) => c && c.status === "ok");
       if (ok.length === 0) continue;
       checked++;
       if (ok.some((c) => c!.cited)) cited++;
-      else if (ok.some((c) => c!.brandMentioned)) brandOnly++;
     }
-    return { total: promptRows.length, checked, cited, brandOnly };
+    return { total: promptRows.length, checked, cited };
   })();
 
-  // ── Previous-run averages per site (for the matrix ▲/▼ tickers) ──
-  // history is ordered ASC; the second-to-last point per site is "last run".
-  const prevRuns: Record<string, { overall: number | null; dims: Partial<Record<keyof DimensionScores, number>> }> = {};
-  {
-    const siteKeys: (string | null)[] = [null, ...project.competitors.map((c) => c.id)];
-    for (const key of siteKeys) {
-      const pts = project.history.filter((h) => (h.competitorId ?? null) === key);
-      if (pts.length < 2) continue;
-      const prev = pts[pts.length - 2];
-      prevRuns[key ?? "client"] = {
-        overall: Math.round(Number(prev.avgScore)),
-        dims: {
-          coreIntent: Math.round(Number(prev.avgCoreIntent)),
-          edgeCases: Math.round(Number(prev.avgEdgeCases)),
-          impliedQuestions: Math.round(Number(prev.avgImpliedQuestions)),
-          fanOutQueries: Math.round(Number(prev.avgFanOutQueries)),
-          retrievable: Math.round(Number(prev.avgRetrievable)),
-          extractable: Math.round(Number(prev.avgExtractable)),
-          citable: Math.round(Number(prev.avgCitable)),
-          reusable: Math.round(Number(prev.avgReusable)),
-          aioReadiness: Math.round(Number(prev.avgAioReadiness ?? 0)),
-          paaCoverage: Math.round(Number(prev.avgPaaCoverage ?? 0)),
-        },
-      };
-    }
-  }
-
-  // In-progress jobs (for status banner)
-  // Only jobs created in the last 2 hours to avoid showing stale stuck jobs
-  const activeJobs = await sql`
-    SELECT id, competitor_id, status, crawled_pages, total_pages, scored_pages
-    FROM audit_jobs
-    WHERE project_id = ${params.id}
-      AND status NOT IN ('done', 'failed')
-      AND created_at > NOW() - INTERVAL '2 hours'
-    ORDER BY created_at DESC LIMIT 5
-  `.catch(() => []);
-
-  // Auto-expire jobs older than 2 hours that are still stuck — mark them failed
-  await sql`
-    UPDATE audit_jobs
-    SET status = 'failed', error_message = 'Timed out — job exceeded 2 hour limit'
-    WHERE project_id = ${params.id}
-      AND status NOT IN ('done', 'failed')
-      AND created_at <= NOW() - INTERVAL '2 hours'
-  `.catch(() => null);
-
+  const activeJobs = await getActiveJobs(params.id);
   const isRunning = activeJobs.length > 0;
 
+  // ── Setup checklist (all states derived from real data) ──
+  const fixFirst = hasResults ? buildFixFirst(clientScores, serpSummaries) : [];
+  const weakestPage = fixFirst[0] ?? null;
+  const checklist: { label: string; done: boolean; href?: string; cta?: string }[] = [
+    { label: "Run your first audit", done: hasResults },
+    {
+      label: "Add competitors to benchmark against",
+      done: project.competitors.length > 0,
+      href: `/projects/${params.id}/competitors`,
+      cta: "Add",
+    },
+    ...(serpEnabled
+      ? [
+          {
+            label: "Pull search visibility data",
+            done: serpJobId != null,
+            href: `/projects/${params.id}/visibility`,
+            cta: "View",
+          },
+        ]
+      : []),
+    {
+      label: "Optimize your first page",
+      done: optimizedRows.length > 0,
+      href: weakestPage ? `/projects/${params.id}/optimize/${weakestPage.pageId}` : undefined,
+      cta: "Start",
+    },
+  ];
+  const checklistDone = checklist.filter((c) => c.done).length;
+  const showChecklist = checklistDone < checklist.length;
+
+  // ── Competitor tile facts ──
+  const competitorFact = (() => {
+    if (!hasResults || project.competitors.length === 0) return null;
+    let top: { name: string; avg: number; dimsBeaten: number } | null = null;
+    for (const c of project.competitors) {
+      const cs = latestScoresMap[c.id] ?? [];
+      if (cs.length === 0) continue;
+      const cSummary = computeQuickSummary(cs);
+      const dimsBeaten = ALL_DIMENSIONS.filter(
+        (d: ScoreDimension) => cSummary.averageByDimension[d] > (summary?.averageByDimension[d] ?? 0)
+      ).length;
+      if (!top || cSummary.averageScore > top.avg) {
+        top = { name: c.name, avg: cSummary.averageScore, dimsBeaten };
+      }
+    }
+    return top;
+  })();
+
+  const needsWorkCount = clientScores.filter((s) => s.grade === "D" || s.grade === "F").length;
+  const verifiedCount = optimizedRows.filter((r) => r.verified).length;
+
+  const overall = project.latestScore ?? summary?.averageScore ?? null;
+  const strongest = summary ? summary.topIssues[summary.topIssues.length - 1] : null;
+  const weakestDim = summary ? summary.topIssues[0] : null;
+
   return (
-    <div className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-8">
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
       {/* ── Header ─────────────────────────────────────────────
-          `relative z-30` is LOAD-BEARING. Every card below carries
-          .anim-fade-up, whose fill-mode:both leaves a permanent transform —
-          which creates a stacking context. Without a z-index here, the header
-          paints under those later siblings and any popover opened from it (the
-          AI-crawler tile, the score/grade ⓘ tips) is half-hidden behind the
-          Search Visibility card. Same transform trap as InfoTip's dismissal
-          bug; see components/InfoTip.tsx. */}
+          `relative z-30` is LOAD-BEARING. Cards below carry .anim-fade-up,
+          whose fill-mode:both leaves a permanent transform — a stacking
+          context. Without a z-index here the AiCrawlerTile / InfoTip popovers
+          paint under later siblings (see components/InfoTip.tsx). */}
       <div className="anim-fade-up relative z-30 flex items-start justify-between gap-4 flex-wrap">
         <div>
           <div className="flex items-center gap-2 mb-1">
@@ -308,62 +184,39 @@ export default async function ProjectHubPage({
               <span style={{ color: "var(--indigo)" }}>{project.scopePrefix}</span>
             )}
           </p>
-          <div className="flex items-center gap-2 mt-2 flex-wrap">
-            {project.auditSource !== "domain" && (
-              <span
-                className="inline-block px-2 py-0.5 rounded-md text-xs font-medium"
-                style={{ background: "rgba(99,102,241,0.12)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.2)" }}
-              >
-                {project.auditSource === "single"
-                  ? "Single page"
-                  : `URL list · ${project.sourceUrls?.length ?? 0} page${(project.sourceUrls?.length ?? 0) !== 1 ? "s" : ""}`}
-              </span>
-            )}
-            <EditAuditSourceButton
-              projectId={params.id}
-              auditSource={project.auditSource}
-              websiteUrl={project.websiteUrl}
-              scopePrefix={project.scopePrefix}
-              maxPages={project.maxPages}
-              sourceUrls={project.sourceUrls}
-              latestRunUrls={clientScores.map((s) => s.url)}
-            />
-          </div>
+          {project.auditSource !== "domain" && (
+            <span
+              className="inline-block mt-2 px-2 py-0.5 rounded-md text-xs font-medium"
+              style={{ background: "rgba(99,102,241,0.12)", color: "#4f46e5", border: "1px solid rgba(99,102,241,0.2)" }}
+            >
+              {project.auditSource === "single"
+                ? "Single page"
+                : `URL list · ${project.sourceUrls?.length ?? 0} page${(project.sourceUrls?.length ?? 0) !== 1 ? "s" : ""}`}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center justify-end gap-3 flex-wrap">
-          {project.latestScore != null && (
-            <div className="text-center px-5 py-3 rounded-xl" style={{ background: "var(--bg-1)", border: "1px solid var(--border)" }}>
-              <div className="text-3xl font-bold" style={{ color: scoreColor(project.latestScore) }}>
-                {project.latestScore}
-              </div>
-              <div className="text-xs mt-0.5 flex items-center justify-center gap-1.5" style={{ color: "var(--text-3)" }}>
-                Latest score
-                <InfoTip
-                  title="Latest score"
-                  text="The average overall LLM-readiness score (0–100) across all pages in the latest completed audit run of this site."
-                />
-              </div>
-            </div>
-          )}
-          {clientMedianGrade && (
-            <div className="text-center px-5 py-3 rounded-xl" style={{ background: "var(--bg-1)", border: "1px solid var(--border)" }}>
-              <div className="text-3xl font-bold" style={{ color: gradeColor(clientMedianGrade) }}>
-                {clientMedianGrade}
-              </div>
-              <div className="text-xs mt-0.5 flex items-center justify-center gap-1.5" style={{ color: "var(--text-3)" }}>
-                Median grade
-                <InfoTip
-                  title="Median grade"
-                  text="The middle letter grade across all audited pages — a truer picture of the typical page than the average, since a few very strong or very weak pages can't skew it."
-                />
-              </div>
-            </div>
-          )}
           {aiAccess && <AiCrawlerTile data={aiAccess} />}
           <div className="flex flex-col items-end gap-1.5">
-            <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
-            {/* Download Assessment moved to the global top nav (see NavActions). */}
+            <div className="flex items-center gap-2">
+              {hasResults && (
+                <a
+                  href={`/api/projects/${params.id}/report`}
+                  className="inline-flex items-center gap-1.5 text-sm px-4 py-1.5 rounded-lg border transition-colors hover:border-slate-300"
+                  style={{ background: "var(--bg-1)", borderColor: "var(--border)", color: "var(--text-2)" }}
+                  title="Download the client-ready PDF assessment from the latest completed run"
+                >
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}>
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                    <polyline points="7 10 12 15 17 10" />
+                    <line x1="12" y1="15" x2="12" y2="3" />
+                  </svg>
+                  Assessment
+                </a>
+              )}
+              <RunButton projectId={params.id} hasCompetitors={project.competitors.length > 0} />
+            </div>
             {staleBaseline && !isRunning && (
               <p className="text-[10.5px] text-amber-600 text-right max-w-[200px] leading-snug">
                 ⚠ Re-run before optimizing — current scores are from an older scoring engine
@@ -374,16 +227,12 @@ export default async function ProjectHubPage({
       </div>
 
       {/* ── Active run banner (live progress) ─────────────── */}
-      {isRunning && (
-        <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />
-      )}
+      {isRunning && <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />}
 
-      {/* ── AI crawler access — BLOCKED only ───────────────
-          The all-allowed and partially-restricted states live in the compact
-          <AiCrawlerTile> in the header (click to expand). A hard block keeps
-          the full-width bar: it is the highest-value finding the audit
-          produces, because no content fix moves the needle until the crawler
-          is let in. Don't collapse this one to save space. */}
+      {/* ── AI crawler access — BLOCKED only. The all-allowed and partial
+          states live in the compact AiCrawlerTile in the header. A hard block
+          keeps the full-width bar: it's the highest-value finding the audit
+          produces. Don't collapse this one to save space. */}
       {aiAccess && blockedBots.length > 0 && (
         <div
           className="anim-fade-up card px-5 py-3.5"
@@ -413,20 +262,182 @@ export default async function ProjectHubPage({
         </div>
       )}
 
-      {/* ── Search visibility (AI Overviews + PAA) ────────── */}
-      {hasResults && (
-        <SearchVisibilityCard
-          projectId={params.id}
-          rollup={serpRollup}
-          promptSummary={promptSummary}
-          crawledUrls={clientScores.length}
-          configured={serpEnabled}
-        />
+      {/* ── Hero: score ring + setup checklist ───────────── */}
+      <div className={`grid gap-4 ${showChecklist && hasResults ? "lg:grid-cols-[1fr_1.3fr]" : "grid-cols-1"}`}>
+        {hasResults && overall != null && (
+          <div className="anim-fade-up card p-5 flex items-center gap-5">
+            <div
+              className="rounded-full flex items-center justify-center flex-shrink-0"
+              style={{
+                width: 104,
+                height: 104,
+                background: `conic-gradient(${scoreColor(overall)} 0% ${overall}%, var(--bg-3) ${overall}% 100%)`,
+              }}
+              role="img"
+              aria-label={`Overall LLM readiness score ${overall} out of 100`}
+            >
+              <div
+                className="rounded-full flex flex-col items-center justify-center"
+                style={{ width: 80, height: 80, background: "var(--bg-1)" }}
+              >
+                <span className="text-[26px] font-extrabold leading-none" style={{ color: "var(--text-1)", letterSpacing: "-0.02em" }}>
+                  {overall}
+                </span>
+                {clientMedianGrade && (
+                  <span className="text-[10.5px] font-bold mt-0.5" style={{ color: gradeColor(clientMedianGrade) }}>
+                    MEDIAN {clientMedianGrade}
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold flex items-center gap-1.5" style={{ color: "var(--text-1)" }}>
+                LLM readiness score
+                <InfoTip
+                  title="Overall score"
+                  text="The average overall LLM-readiness score (0–100) across all pages in the latest completed audit run, weighted across all ten scoring dimensions. The median letter grade shows the typical page — a few very strong or weak pages can't skew it."
+                />
+              </p>
+              <p className="text-xs mt-1 leading-relaxed" style={{ color: "var(--text-3)" }}>
+                Scored across {ALL_DIMENSIONS.length} dimensions on {clientScores.length} page{clientScores.length === 1 ? "" : "s"}.
+              </p>
+              {strongest && weakestDim && (
+                <p className="text-xs mt-2" style={{ color: "var(--text-2)" }}>
+                  <span className="font-semibold" style={{ color: "#059669" }}>Strongest:</span>{" "}
+                  {DIMENSION_LABELS[strongest.dimension as ScoreDimension]} ({strongest.averageScore})
+                  {" · "}
+                  <span className="font-semibold" style={{ color: "#dc2626" }}>Weakest:</span>{" "}
+                  {DIMENSION_LABELS[weakestDim.dimension as ScoreDimension]} ({weakestDim.averageScore})
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {showChecklist && (
+          <div className="anim-fade-up stagger-1 card p-5">
+            <div className="flex items-baseline justify-between gap-3">
+              <p className="text-sm font-semibold" style={{ color: "var(--text-1)" }}>
+                {hasResults ? "Set up this project" : "Get started"}
+              </p>
+              <p className="text-[11.5px] font-semibold" style={{ color: "var(--text-3)" }}>
+                {checklistDone} of {checklist.length} done
+              </p>
+            </div>
+            <div className="mt-2">
+              {checklist.map((item, i) => {
+                const isNext = !item.done && checklist.slice(0, i).every((p) => p.done);
+                return (
+                  <div
+                    key={item.label}
+                    className="flex items-center gap-3 py-2 text-[13px]"
+                    style={{ borderTop: i > 0 ? "1px solid var(--border)" : "none" }}
+                  >
+                    <span
+                      className="w-[18px] h-[18px] rounded-full flex-shrink-0 inline-flex items-center justify-center text-[11px]"
+                      style={
+                        item.done
+                          ? { background: "rgba(5,150,105,0.14)", color: "#059669" }
+                          : isNext
+                            ? { border: "2px solid #6366f1" }
+                            : { border: "2px solid var(--bg-4, #d3dae6)" }
+                      }
+                    >
+                      {item.done ? "✓" : ""}
+                    </span>
+                    <span
+                      className={isNext ? "font-semibold" : ""}
+                      style={{
+                        color: item.done ? "var(--text-3)" : "var(--text-1)",
+                        textDecoration: item.done ? "line-through" : "none",
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                    {!item.done && item.href && (
+                      <Link
+                        href={item.href}
+                        className="ml-auto text-xs font-semibold hover:underline whitespace-nowrap"
+                        style={{ color: "#4f46e5" }}
+                      >
+                        {item.cta ?? "Open"} →
+                      </Link>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            {!hasResults && !isRunning && (
+              <p className="text-xs mt-3 leading-relaxed" style={{ color: "var(--text-3)" }}>
+                Kick off your first audit with <span className="font-semibold">Run Audit</span> above — pages are
+                crawled, scored on {ALL_DIMENSIONS.length} dimensions, and this page fills in as results land.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Fix these first ──────────────────────────────── */}
+      {fixFirst.length > 0 && (
+        <div className="anim-fade-up stagger-2 card overflow-hidden">
+          <div className="flex items-baseline justify-between gap-3 px-5 pt-4 pb-1">
+            <p className="text-sm font-semibold flex items-center gap-1.5" style={{ color: "var(--text-1)" }}>
+              Fix these first
+              <InfoTip
+                title="Fix these first"
+                text="Pages ranked by how much weighted headroom they have across the ten scoring dimensions — concentrated weaknesses in heavily-weighted dimensions rank above a uniformly mediocre page. The dimension scores shown are the page's real audit scores."
+              />
+            </p>
+            <Link
+              href={`/projects/${params.id}/optimize`}
+              className="text-xs font-semibold hover:underline"
+              style={{ color: "#4f46e5" }}
+            >
+              Full queue →
+            </Link>
+          </div>
+          {fixFirst.map((f, i) => (
+            <div
+              key={f.pageId}
+              className="flex items-center gap-4 px-5 py-3"
+              style={{ borderTop: "1px solid var(--border)" }}
+            >
+              <span
+                className="w-6 h-6 rounded-lg flex-shrink-0 inline-flex items-center justify-center text-xs font-extrabold"
+                style={{ background: "rgba(99,102,241,0.1)", color: "#4f46e5" }}
+              >
+                {i + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-[13px] font-semibold truncate flex items-center gap-2" style={{ color: "var(--text-1)" }}>
+                  <span className="truncate">{pathOf(f.url)}</span>
+                  <span
+                    className="inline-flex items-center justify-center text-[10.5px] font-bold rounded px-1.5 py-px flex-shrink-0"
+                    style={{ background: `${gradeColor(f.grade)}1f`, color: gradeColor(f.grade), border: `1px solid ${gradeColor(f.grade)}40` }}
+                  >
+                    {f.grade} · {f.overall}
+                  </span>
+                </p>
+                <p className="text-xs mt-0.5 truncate" style={{ color: "var(--text-3)" }}>
+                  {f.weakest.map((w) => `${w.label} ${w.score}`).join(" · ")}
+                  {f.serpFacts.length > 0 && ` — ${f.serpFacts[0]}`}
+                </p>
+              </div>
+              <Link
+                href={`/projects/${params.id}/optimize/${f.pageId}`}
+                className={`flex-shrink-0 text-xs font-semibold px-3 py-1.5 rounded-lg ${i === 0 ? "btn-primary" : "hover:underline"}`}
+                style={i === 0 ? undefined : { color: "#4f46e5" }}
+              >
+                Open workbench
+              </Link>
+            </div>
+          ))}
+        </div>
       )}
 
-      {/* ── Score trend chart ──────────────────────────────── */}
+      {/* ── Score trend ──────────────────────────────────── */}
       {project.history.length > 1 && (
-        <div className="anim-fade-up stagger-1 card p-5">
+        <div className="anim-fade-up stagger-3 card p-5">
           <p className="section-label">Score over time</p>
           <TrendChart
             history={project.history}
@@ -436,88 +447,66 @@ export default async function ProjectHubPage({
         </div>
       )}
 
-      {/* ── Competitor matrix ──────────────────────────────── */}
-      {project.competitors.length > 0 && hasResults && (
-        <div className="anim-fade-up stagger-2 card overflow-hidden">
-          <div className="p-5 border-b" style={{ borderColor: "var(--border)" }}>
-            <p className="section-label mb-0">Competitive comparison — latest scores</p>
-          </div>
-          <CompetitorMatrix
-            clientName={project.clientName}
-            clientScores={clientScores}
-            competitors={project.competitors}
-            competitorScoresMap={latestScoresMap}
-            competitorColors={COMPETITOR_COLORS}
-            projectId={params.id}
-            prevRuns={prevRuns}
-          />
-        </div>
-      )}
-
-      {/* ── Optimized-pages summary (projected impact) ─────── */}
-      {hasResults && optimizedRows.length > 0 && (
-        <div className="anim-fade-up stagger-3">
-          <p className="section-label">Optimization progress — projected impact</p>
-          <OptimizedSummary projectId={params.id} rows={optimizedRows} />
-        </div>
-      )}
-
-      {/* ── Full audit results (client) ────────────────────── */}
+      {/* ── Section tiles (teach the rail by using it) ───── */}
       {hasResults && (
-        <div className="anim-fade-up stagger-3">
-          <p className="section-label">{project.clientName} — page-level results</p>
-          <AuditResults
-            serpSummaries={serpSummaries}
-            job={{ id: clientJobId } as any}
-            scores={clientScores}
-            summary={computeQuickSummary(clientScores)}
-            competitorPages={competitorPageEntries}
-            projectId={params.id}
-            auditSource={project.auditSource}
-            sourceUrls={project.sourceUrls}
-            optimizeStates={optimizeStates}
-          />
+        <div className="grid sm:grid-cols-3 gap-4">
+          <Link
+            href={`/projects/${params.id}/visibility`}
+            className="anim-fade-up stagger-3 card card-interactive p-4 block"
+          >
+            <p className="text-xs font-bold" style={{ color: "var(--text-1)" }}>🔍 AI Visibility</p>
+            <p className="text-[13px] mt-1.5 leading-relaxed" style={{ color: "var(--text-2)" }}>
+              {serpRollup
+                ? `Cited in ${serpRollup.aioCitedKws} of ${serpRollup.aioTriggeredKws} AI Overview keywords · you own ${serpRollup.paaQuestionsOwned} of ${serpRollup.paaQuestionsTotal} PAA questions${promptSummary && promptSummary.checked > 0 ? ` · ${promptSummary.cited} of ${promptSummary.checked} checked LLM prompts cite you` : ""}.`
+                : serpEnabled
+                  ? "No search visibility data yet — it's pulled automatically with each audit run."
+                  : "Search visibility isn't configured — add a DataForSEO or Semrush key to pull AIO + PAA data."}
+            </p>
+            <p className="text-xs font-semibold mt-2" style={{ color: "#4f46e5" }}>
+              {serpRollup ? "See where you're losing →" : "Learn more →"}
+            </p>
+          </Link>
+          <Link
+            href={`/projects/${params.id}/competitors`}
+            className="anim-fade-up stagger-4 card card-interactive p-4 block"
+          >
+            <p className="text-xs font-bold" style={{ color: "var(--text-1)" }}>👥 Competitors</p>
+            <p className="text-[13px] mt-1.5 leading-relaxed" style={{ color: "var(--text-2)" }}>
+              {competitorFact
+                ? `${competitorFact.name} averages ${competitorFact.avg} vs your ${summary?.averageScore} — ahead of you on ${competitorFact.dimsBeaten} of ${ALL_DIMENSIONS.length} dimensions.`
+                : project.competitors.length > 0
+                  ? "Competitors are set up — run an audit to score them side-by-side."
+                  : "No competitors tracked yet. Add the sites you're losing AI answers to."}
+            </p>
+            <p className="text-xs font-semibold mt-2" style={{ color: "#4f46e5" }}>
+              {competitorFact ? "Compare head-to-head →" : "Add competitors →"}
+            </p>
+          </Link>
+          <Link
+            href={`/projects/${params.id}/optimize`}
+            className="anim-fade-up stagger-5 card card-interactive p-4 block"
+          >
+            <p className="text-xs font-bold" style={{ color: "var(--text-1)" }}>✏️ Optimize</p>
+            <p className="text-[13px] mt-1.5 leading-relaxed" style={{ color: "var(--text-2)" }}>
+              {optimizedRows.length > 0
+                ? `${optimizedRows.length} page${optimizedRows.length === 1 ? "" : "s"} in progress · ${verifiedCount} verified live${needsWorkCount > 0 ? ` · ${needsWorkCount} more need${needsWorkCount === 1 ? "s" : ""} work` : ""}.`
+                : needsWorkCount > 0
+                  ? `${needsWorkCount} page${needsWorkCount === 1 ? "" : "s"} graded D or F — the workbench rewrites, simulates, and re-scores them.`
+                  : "Every page grades C or better. Push your B pages toward A in the workbench."}
+            </p>
+            <p className="text-xs font-semibold mt-2" style={{ color: "#4f46e5" }}>Open the queue →</p>
+          </Link>
         </div>
       )}
-
-      {/* Competitor management moved to the "Competitors" button in the top nav
-          (see components/CompetitorManager.tsx). */}
     </div>
   );
 }
 
-function scoreColor(s: number) {
-  if (s >= 80) return "#059669";
-  if (s >= 65) return "#2563eb";
-  if (s >= 50) return "#d97706";
-  if (s >= 35) return "#ea580c";
-  return "#dc2626";
-}
-
-function gradeColor(g: string) {
-  return g === "A" ? "#059669" : g === "B" ? "#2563eb" : g === "C" ? "#d97706" : g === "D" ? "#ea580c" : "#dc2626";
-}
-
-function medianGrade(
-  scores: Awaited<ReturnType<typeof getScoresByJob>>
-): "A" | "B" | "C" | "D" | "F" | null {
-  if (!scores.length) return null;
-  const rank: Record<string, number> = { F: 0, D: 1, C: 2, B: 3, A: 4 };
-  const letters = ["F", "D", "C", "B", "A"] as const;
-  const sorted = scores.map((s) => rank[s.grade] ?? 0).sort((a, b) => a - b);
-  return letters[sorted[Math.floor((sorted.length - 1) / 2)]];
-}
-
-function computeQuickSummary(scores: Awaited<ReturnType<typeof getScoresByJob>>) {
-  if (!scores.length) return null as any;
-  const dims = ["coreIntent","edgeCases","impliedQuestions","fanOutQueries","retrievable","extractable","citable","reusable","aioReadiness","paaCoverage"] as const;
-  const avg = (d: typeof dims[number]) => Math.round(scores.reduce((s,p) => s + p.scores[d], 0) / scores.length);
-  const avgByDim = Object.fromEntries(dims.map(d => [d, avg(d)])) as any;
-  const avgScore = Math.round(scores.reduce((s,p) => s + p.overallScore, 0) / scores.length);
-  const grades: Record<string,number> = {A:0,B:0,C:0,D:0,F:0};
-  scores.forEach(s => grades[s.grade] = (grades[s.grade]||0) + 1);
-  // All 10 dimensions ranked weakest → strongest (full list, no bottom-4 cut).
-  const topIssues = dims.map(d => ({ dimension: d, affectedPages: scores.filter(s => s.scores[d] < 50).length, averageScore: avgByDim[d] })).sort((a,b) => a.averageScore - b.averageScore);
-  const sorted = [...scores].sort((a,b) => b.overallScore - a.overallScore);
-  return { totalPages: scores.length, averageScore: avgScore, averageByDimension: avgByDim, gradeDistribution: grades, topIssues, topPages: sorted.slice(0,5).map(s => ({url:s.url,score:s.overallScore})), bottomPages: sorted.slice(-5).reverse().map(s => ({url:s.url,score:s.overallScore})) };
+function pathOf(url: string): string {
+  try {
+    const u = new URL(url);
+    return u.pathname === "/" ? u.hostname : u.pathname;
+  } catch {
+    return url;
+  }
 }
