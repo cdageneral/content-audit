@@ -176,7 +176,9 @@ export default function CompetitorMatrix({
                         because this table sits inside `card overflow-hidden`
                         AND an `overflow-x-auto` scroller, either of which
                         would clip an in-flow popover. */}
-                    <span className="inline-flex items-center gap-1.5">
+                    {/* Label left, ⓘ flush right — the icons line up in one
+                        column instead of ragging with the label widths. */}
+                    <span className="flex items-center justify-between gap-2 w-full">
                       {DIMENSION_LABELS[dim]}
                       <InfoTip title={DIMENSION_LABELS[dim]} text={DIMENSION_HINTS[dim]} />
                     </span>

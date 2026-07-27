@@ -24,8 +24,12 @@
 //    `.anim-fade-up` section because each one is its own stacking context.
 //    document.body has no transform, so `position: fixed` here means the
 //    viewport, as intended — and nothing can clip or out-stack it.
-//    Because it's fixed, an open tip is closed on scroll/resize rather than
-//    left floating away from its icon.
+//    Because it's fixed, an open tip REPOSITIONS on scroll/resize (it would
+//    otherwise float away from its icon) and only closes once its icon has
+//    scrolled out of view. Dismissing on any scroll was tried first and is
+//    wrong: the browser's own scroll-into-view when you click an ⓘ near the
+//    viewport edge lands AFTER the click and instantly killed the tip you
+//    just opened.
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
@@ -43,6 +47,8 @@ export default function InfoTip({ title, text }: { title?: string; text: string 
   const rootRef = useRef<HTMLSpanElement>(null);
   const tipRef = useRef<HTMLSpanElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  // Bumped on scroll/resize to re-run the placement passes below.
+  const [tick, setTick] = useState(0);
 
   function place() {
     const icon = rootRef.current?.getBoundingClientRect();
@@ -57,8 +63,8 @@ export default function InfoTip({ title, text }: { title?: string; text: string 
   }
 
   // Second pass: now that the popover has a real height, flip it above the
-  // icon if it would run off the bottom. Deps are [open] only so this settles
-  // in one pass — adding `pos` here would loop.
+  // icon if it would run off the bottom. `pos` is deliberately NOT a dep —
+  // this pass sets it, and depending on it would loop.
   useIsoLayoutEffect(() => {
     if (!open) return;
     const el = tipRef.current;
@@ -70,7 +76,7 @@ export default function InfoTip({ title, text }: { title?: string; text: string 
       const above = icon.top - GAP - r.height;
       setPos((p) => (p ? { ...p, top: Math.max(VIEWPORT_MARGIN, above) } : p));
     }
-  }, [open]);
+  }, [open, tick]);
 
   useEffect(() => {
     if (!open) return;
@@ -84,22 +90,35 @@ export default function InfoTip({ title, text }: { title?: string; text: string 
     function onKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") setOpen(false);
     }
-    // The popover is fixed-positioned, so any scroll would slide it away from
-    // its icon — close instead of chasing.
-    function onDetach() {
-      setOpen(false);
+    // The popover is fixed-positioned, so it has to follow its icon while the
+    // page scrolls. Only bail out once the icon itself has left the viewport.
+    let frame = 0;
+    function onReflow() {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        const icon = rootRef.current?.getBoundingClientRect();
+        const vh = document.documentElement.clientHeight;
+        if (!icon || icon.bottom < 0 || icon.top > vh) {
+          setOpen(false);
+          return;
+        }
+        place();
+        setTick((t) => t + 1);
+      });
     }
     // pointerdown, not click: closes on press even if the press lands on
     // something that stops click propagation.
     document.addEventListener("pointerdown", onPointerDown, true);
     document.addEventListener("keydown", onKeyDown);
-    window.addEventListener("scroll", onDetach, true);
-    window.addEventListener("resize", onDetach);
+    window.addEventListener("scroll", onReflow, true);
+    window.addEventListener("resize", onReflow);
     return () => {
       document.removeEventListener("pointerdown", onPointerDown, true);
       document.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("scroll", onDetach, true);
-      window.removeEventListener("resize", onDetach);
+      window.removeEventListener("scroll", onReflow, true);
+      window.removeEventListener("resize", onReflow);
+      if (frame) cancelAnimationFrame(frame);
     };
   }, [open]);
 
@@ -142,6 +161,7 @@ export default function InfoTip({ title, text }: { title?: string; text: string 
             setOpen(false);
           } else {
             place();
+            setTick(0);
             setOpen(true);
           }
         }}
