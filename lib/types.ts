@@ -157,6 +157,38 @@ export const DIMENSION_LABELS: Record<ScoreDimension, string> = {
   paaCoverage: "PAA Coverage",
 };
 
+/**
+ * Plain-language definition of each scoring dimension, shown in the ⓘ popovers
+ * next to dimension labels.
+ *
+ * 🔑 These are DERIVED FROM THE LIVE RUBRIC in lib/scoring/prompt.ts — each one
+ * paraphrases that dimension's "What this measures" line plus its strongest
+ * "Penalize:" signals. If a rubric changes, change the matching hint here in
+ * the same commit, or the UI starts describing a scorer that no longer exists.
+ */
+export const DIMENSION_HINTS: Record<ScoreDimension, string> = {
+  coreIntent:
+    "Whether the page has one clear, unambiguous purpose an LLM can confidently identify and restate. Multiple competing topics, vague \u201coverview\u201d content with no thesis, and navigation-only or generic category pages pull the score down.",
+  edgeCases:
+    "Whether the content acknowledges limitations, exceptions, prerequisites, and failure modes. Absolute \u201calways / never\u201d claims, missing prerequisites, and no mention of when the advice doesn\u2019t apply cost points.",
+  impliedQuestions:
+    "Whether the page proactively answers the natural follow-up questions a reader would generate. Stopping at \u201cwhat\u201d without \u201chow\u201d or \u201cwhy\u201d, missing concrete examples, and no troubleshooting on instructional content lower it.",
+  fanOutQueries:
+    "How well the page connects to adjacent topics, so an LLM can use it as a starting point for related queries. Contextual internal links and \u201csee also\u201d pathways raise it; a topical silo with no connections lowers it.",
+  retrievable:
+    "How discoverable and semantically clear the page is to LLM retrieval systems (RAG pipelines, AI search, embeddings). A strong H1 and clean H1\u2192H2\u2192H3 hierarchy help; a missing H1, skipped heading levels, keyword stuffing, or text that only exists in JavaScript hurt.",
+  extractable:
+    "Whether the key facts can be pulled out cleanly as structured knowledge. Insights trapped in charts or images, nested tables, and content that needs a click to reveal all reduce the score.",
+  citable:
+    "Whether the page is authoritative and attributable enough for an LLM to cite it. A named author, publication date, canonical URL, and external sources raise it; \u201cPosted by Admin\u201d, no date, and unsourced factual claims lower it.",
+  reusable:
+    "Whether individual sections stand alone as answers without their surrounding context. \u201cAs mentioned above\u201d, \u201csee previous section\u201d, and pronouns with no antecedent are the main penalties.",
+  aioReadiness:
+    "Whether the page is shaped like the passages Google AI Overviews actually cite: a direct 40\u201370-word answer immediately under an intent-matching heading, conclusion before elaboration. Burying the answer under background paragraphs is the main penalty. Distinct from Extractable (can facts be pulled out at all) and Reusable (do sections stand alone).",
+  paaCoverage:
+    "Whether the page directly answers the real question-form queries people ask about this topic \u2014 the ones that appear in Google\u2019s People Also Ask boxes. When verified SERP questions exist for the page they are judged one by one; otherwise the natural question set is inferred. Distinct from Implied Questions, which covers a reader\u2019s inline follow-ups.",
+};
+
 export const DIMENSION_GROUPS = {
   contentQuality: ["coreIntent", "edgeCases", "impliedQuestions", "fanOutQueries"] as ScoreDimension[],
   theAblesGroup: ["retrievable", "extractable", "citable", "reusable"] as ScoreDimension[],
