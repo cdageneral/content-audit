@@ -15,6 +15,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import InfoTip from "@/components/InfoTip";
 
 export interface SerpRollupView {
   fetchedAt: string;
@@ -210,11 +211,20 @@ function Stat({
   const color =
     tone === "good" ? "#16a34a" : tone === "warn" ? "#d97706" : "inherit";
   return (
-    <div className="rounded-lg border border-black/10 p-3" title={hint}>
+    // The explanation lives behind a click-to-open ⓘ rather than a native
+    // title tooltip: these counts are easy to misread (each is acquired vs
+    // triggered), and a hover-only hint is invisible on touch.
+    <div className="rounded-lg border border-black/10 p-3">
       <div className="text-lg font-semibold tabular-nums" style={{ color }}>
         {value}
       </div>
-      <div className="text-xs opacity-60 mt-0.5">{label}</div>
+      {/* opacity stays on the label TEXT, never on the row: the InfoTip
+          popover is a child here, and an opacity-reduced ancestor makes the
+          whole tooltip translucent (content behind it bleeds through). */}
+      <div className="text-xs mt-0.5 flex items-center gap-1.5">
+        <span className="opacity-60">{label}</span>
+        <InfoTip title={label} text={hint} />
+      </div>
     </div>
   );
 }

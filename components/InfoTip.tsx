@@ -3,10 +3,37 @@
 // Small ⓘ affordance for summary cards: click to open a plain-language
 // explanation of what the card measures; click anywhere to dismiss.
 
-import { useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+
+// Layout effect on the client, plain effect on the server — a bare
+// useLayoutEffect warns during Next's server prerender of client components.
+const useIsoLayoutEffect = typeof window !== "undefined" ? useLayoutEffect : useEffect;
+
+const VIEWPORT_MARGIN = 8;
 
 export default function InfoTip({ title, text }: { title?: string; text: string }) {
   const [open, setOpen] = useState(false);
+  const tipRef = useRef<HTMLSpanElement>(null);
+  // Horizontal nudge applied on top of the -50% centering so the popover can
+  // never hang off the viewport. Without it a tip on a right-edge card adds
+  // real horizontal page scroll (measured: +34px at 1024px, +67px at 390px).
+  const [shift, setShift] = useState(0);
+
+  useIsoLayoutEffect(() => {
+    if (!open) {
+      setShift(0);
+      return;
+    }
+    const el = tipRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const vw = document.documentElement.clientWidth;
+    let d = 0;
+    if (r.right > vw - VIEWPORT_MARGIN) d = vw - VIEWPORT_MARGIN - r.right;
+    if (r.left + d < VIEWPORT_MARGIN) d = VIEWPORT_MARGIN - r.left;
+    // Deps are [open] only, so this settles in one pass — no measure loop.
+    if (d !== 0) setShift(d);
+  }, [open]);
 
   return (
     <span className="relative inline-flex align-middle">
@@ -37,7 +64,12 @@ export default function InfoTip({ title, text }: { title?: string; text: string 
             }}
           />
           <span
-            className="absolute z-50 top-5 left-1/2 -translate-x-1/2 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-left"
+            ref={tipRef}
+            className="absolute z-50 top-5 left-1/2 w-64 rounded-lg border border-slate-200 bg-white p-3 shadow-lg text-left"
+            style={{
+              transform: `translateX(calc(-50% + ${shift}px))`,
+              maxWidth: `calc(100vw - ${VIEWPORT_MARGIN * 2}px)`,
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             {title && (
