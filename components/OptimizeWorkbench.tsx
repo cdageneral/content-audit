@@ -28,6 +28,9 @@ import type {
 import type { PageVisibility, VisibilityKeyword } from "@/lib/serp/visibility";
 import type { TargetCoverage } from "@/lib/db/drafts";
 import type { PromptRow, PromptEngine } from "@/lib/db/prompts";
+// BrandProfile lives in the client-safe half of lib/brand (types only, no store).
+import type { BrandProfile } from "@/lib/brand/types";
+import BrandCheck from "@/components/BrandCheck";
 
 // ── Serialized (client-safe) shapes passed from the server page ──
 
@@ -96,6 +99,8 @@ export interface WorkbenchProps {
   promptChecksConfigured: boolean;
   promptVersion: string;
   scoringModel: string;
+  /** Brand & Context profile (null = none saved) — drives the brand chip + deterministic brand check. */
+  brandProfile: BrandProfile | null;
 }
 
 const WB_ENGINE_ORDER: PromptEngine[] = ["chat_gpt", "perplexity", "gemini", "claude"];
@@ -557,6 +562,17 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
           <span>{error}</span>
           <button onClick={() => setError("")} className="font-bold ml-3">×</button>
         </div>
+      )}
+
+      {/* Brand & Context: chip + deterministic brand check on the live editor
+          content. Renders nothing when no active profile exists. */}
+      {props.brandProfile && (
+        <BrandCheck
+          projectId={projectId}
+          profile={props.brandProfile}
+          title={editor.title}
+          bodyMd={editor.bodyMd}
+        />
       )}
 
       {baseline && baseline.contentHash === null && (

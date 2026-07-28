@@ -3,8 +3,9 @@
 // ─────────────────────────────────────────────────────────────
 //  ProjectRail — the project-scoped left navigation (app shell).
 //  Rendered by app/projects/[id]/layout.tsx for every route under
-//  /projects/[id], including the Optimize workbench. The rail is
-//  the workflow, in order: Overview → Pages → AI Visibility →
+//  /projects/[id], including the Optimize workbench. Setup first
+//  (Brand & Context — configure once, feeds the AI), then the
+//  workflow in order: Overview → Pages → AI Visibility →
 //  Competitors → Optimize, then the output surfaces (Reports,
 //  Settings). The dashboard ("/") stays rail-free — it's a
 //  picker, not a workspace.
@@ -23,6 +24,8 @@ interface RailProps {
   pageCount: number;
   needsWork: number;
   competitorCount: number;
+  /** TRUE when a brand profile with at least one active section exists. */
+  brandActive: boolean;
 }
 
 interface RailItem {
@@ -57,9 +60,30 @@ export default function ProjectRail({
   pageCount,
   needsWork,
   competitorCount,
+  brandActive,
 }: RailProps) {
   const pathname = usePathname() || '';
   const base = `/projects/${projectId}`;
+
+  const setup: RailItem[] = [
+    {
+      key: 'brand',
+      label: 'Brand & Context',
+      href: `${base}/brand`,
+      match: 'prefix',
+      icon: ic(
+        // Sparkle — brand voice/context feeding the AI.
+        <>
+          <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9Z" />
+          <path d="M18.5 15.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9Z" />
+        </>
+      ),
+      // "On" when the profile is live so it's visible at a glance that AI
+      // writing is brand-steered; no badge before setup (the empty state on
+      // the page itself is the call to action).
+      badge: brandActive ? { text: 'On' } : null,
+    },
+  ];
 
   const workflow: RailItem[] = [
     {
@@ -234,6 +258,11 @@ export default function ProjectRail({
         </Link>
 
         <p className="px-3 pt-1 pb-1 text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: 'var(--text-3)' }}>
+          Setup
+        </p>
+        {setup.map(renderItem)}
+
+        <p className="px-3 pt-3 pb-1 text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: 'var(--text-3)' }}>
           Workflow
         </p>
         {workflow.map(renderItem)}
@@ -250,7 +279,7 @@ export default function ProjectRail({
         style={{ background: 'var(--bg-1)', borderColor: 'var(--border)' }}
         aria-label="Project sections"
       >
-        {[...workflow, ...output].map((item) => {
+        {[...setup, ...workflow, ...output].map((item) => {
           const active = isActive(item);
           return (
             <Link
