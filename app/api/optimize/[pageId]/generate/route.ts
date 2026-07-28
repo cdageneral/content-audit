@@ -11,6 +11,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { neon } from "@neondatabase/serverless";
 import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
+import { buildBrandContext } from "@/lib/brand/context";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
 import type { ScoreDimension, Recommendation } from "@/lib/types";
 import { recordAnthropicCall } from "@/lib/usage/record";
@@ -73,6 +74,15 @@ export async function POST(req: NextRequest, { params }: Params) {
       )
       .join("\n");
 
+    // Brand & Context profile (Setup) — same injection as the rewrite route;
+    // a brand read failure must never block generation.
+    const brand = await buildBrandContext(bundle.projectId).catch(() => ({
+      block: "",
+      active: false,
+      sectionsOn: 0,
+      sectionsTotal: 4,
+    }));
+
     // The auditor's stored findings: the written section should explicitly
     // close the gaps the auditor named, not just add adjacent material.
     const findings = await loadDimensionFindings(params.pageId, dimension);
@@ -93,7 +103,7 @@ ${SCORING_SYSTEM_PROMPT}
 ${DIMENSION_LABELS[dimension]}
 
 ${findingsBlock}
-
+${brand.block ? `${brand.block}\n` : ""}
 ## The page
 
 URL: ${bundle.page.url}
