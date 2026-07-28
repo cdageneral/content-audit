@@ -20,6 +20,7 @@ import {
 import { SCORING_MODEL } from "@/lib/scoring/index";
 import { PROMPT_VERSION } from "@/lib/scoring/prompt";
 import { getPageVisibility } from "@/lib/serp/visibility";
+import { getBrandProfile } from "@/lib/brand/store";
 import { getPromptRowsForUrl } from "@/lib/db/prompts";
 import { dfsLlmConfigured } from "@/lib/serp/llm";
 import OptimizeWorkbench from "@/components/OptimizeWorkbench";
@@ -54,13 +55,15 @@ export default async function OptimizePage({
 
   // URL-lineage loading (re-audit safe): drafts/simulations follow the URL,
   // not the page id — a re-audit mints new page rows for the same page.
-  const [drafts, sims, visibility, promptRows] = await Promise.all([
+  const [drafts, sims, visibility, promptRows, brandStored] = await Promise.all([
     getDraftsByUrl(params.id, bundle.page.url).catch(() => []),
     getSimulationsByUrl(params.id, bundle.page.url).catch(() => []),
     // Stored SERP snapshot read only — no provider calls on page load.
     getPageVisibility(bundle.page.url).catch(() => null),
     // Prompt Set rows matched to this URL (assigned or cited) — stored data only.
     getPromptRowsForUrl(params.id, bundle.page.url).catch(() => []),
+    // Brand & Context profile — feeds the workbench chip + deterministic check.
+    getBrandProfile(params.id).catch(() => null),
   ]);
 
   // Benchmark: strongest competitor's latest cached overall score.
@@ -122,6 +125,7 @@ export default async function OptimizePage({
       promptChecksConfigured={dfsLlmConfigured()}
       promptVersion={PROMPT_VERSION}
       scoringModel={SCORING_MODEL}
+      brandProfile={brandStored?.profile ?? null}
     />
   );
 }
