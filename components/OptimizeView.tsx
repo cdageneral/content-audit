@@ -28,6 +28,17 @@ const BUCKET_ICONS: Record<IntentBucket, string> = {
   comparison: '⚖️',
 };
 
+// Citation rate per intent type — figures supplied by Wayne 2026-07-28
+// ("cited in X% of AI answers"); displayed without source attribution at
+// his explicit direction (offered, declined). If a source is added later,
+// put it in a footnote under the card grid.
+const BUCKET_CITE_RATES: Record<IntentBucket, number> = {
+  recency: 81,
+  ranking: 67,
+  local: 55,
+  comparison: 51,
+};
+
 export interface BucketCard {
   bucket: IntentBucket;
   label: string;
@@ -103,7 +114,10 @@ export default function OptimizeView({
                   page{b.count === 1 ? '' : 's'}
                 </span>
               </p>
-              <p className="text-[11px] mt-1.5 leading-snug" style={{ color: 'var(--text-3)' }}>
+              <p className="text-[11.5px] font-semibold mt-1.5" style={{ color: 'var(--text-2)' }}>
+                Cited in <span style={{ color: '#059669', fontWeight: 800 }}>{BUCKET_CITE_RATES[b.bucket]}%</span> of AI answers
+              </p>
+              <p className="text-[11px] mt-1 leading-snug" style={{ color: 'var(--text-3)' }}>
                 {BUCKET_DESCRIPTIONS[b.bucket]}
               </p>
               <p
