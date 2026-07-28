@@ -36,7 +36,7 @@ export default async function ProjectOptimizePage({
   const bucketsByUrl = new Map<string, IntentBucket[] | null>(
     clientScores.map((s) => [s.url, (s.intentBuckets as IntentBucket[] | null) ?? null])
   );
-  const { buckets, unclassified } = buildBucketRollup(clientScores);
+  const { buckets, unclassified, general } = buildBucketRollup(clientScores);
 
   const optimizedRows = buildOptimizedRows(clientScores, optimizeStates).map((r) => ({
     ...r,
@@ -89,6 +89,7 @@ export default async function ProjectOptimizePage({
           projectId={params.id}
           buckets={buckets}
           unclassified={unclassified}
+          general={general}
           optimizedRows={optimizedRows}
           queue={queue}
         />
