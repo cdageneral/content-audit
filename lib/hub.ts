@@ -17,6 +17,7 @@ import { getScoresByJob } from "@/lib/db/client";
 import { refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
 import { DEFAULT_WEIGHTS, ALL_DIMENSIONS, DIMENSION_LABELS, ALL_BUCKETS, BUCKET_LABELS, isAiFetchLikely } from "@/lib/types";
+import { sanitizeBrandProfile, summarizeBrandContext } from "@/lib/brand/types";
 import type { DimensionScores, PageScore, ScoreDimension, IntentBucket } from "@/lib/types";
 import type { PageOptimizeState } from "@/lib/db/drafts";
 
@@ -304,6 +305,8 @@ export interface RailStats {
   pageCount: number;
   needsWork: number;
   competitorCount: number;
+  /** TRUE when a brand profile exists with ≥1 enabled, non-empty section. */
+  brandActive: boolean;
   exists: boolean;
 }
 
@@ -313,7 +316,7 @@ export async function getRailStats(projectId: string): Promise<RailStats> {
     SELECT client_name, website_url FROM projects WHERE id = ${projectId}
   `.catch(() => [] as Record<string, unknown>[]);
   if (projRows.length === 0) {
-    return { clientName: "", websiteUrl: "", pageCount: 0, needsWork: 0, competitorCount: 0, exists: false };
+    return { clientName: "", websiteUrl: "", pageCount: 0, needsWork: 0, competitorCount: 0, brandActive: false, exists: false };
   }
   const jobRows = await sql`
     SELECT id FROM audit_jobs
@@ -335,12 +338,21 @@ export async function getRailStats(projectId: string): Promise<RailStats> {
   const compRows = await sql`
     SELECT COUNT(*)::int AS n FROM competitor_configs WHERE project_id = ${projectId}
   `.catch(() => [] as Record<string, unknown>[]);
+  // brand_profiles is lazily created by lib/brand/store — before its first
+  // DDL run the query fails, which the catch reads as "no profile yet".
+  const brandRows = await sql`
+    SELECT profile FROM brand_profiles WHERE project_id = ${projectId}
+  `.catch(() => [] as Record<string, unknown>[]);
+  const brandActive = brandRows[0]
+    ? summarizeBrandContext(sanitizeBrandProfile(brandRows[0].profile)).active
+    : false;
   return {
     clientName: String(projRows[0].client_name ?? ""),
     websiteUrl: String(projRows[0].website_url ?? ""),
     pageCount,
     needsWork,
     competitorCount: (compRows[0]?.n as number) ?? 0,
+    brandActive,
     exists: true,
   };
 }
