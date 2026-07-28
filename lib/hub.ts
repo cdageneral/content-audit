@@ -16,8 +16,8 @@ import { neon } from "@neondatabase/serverless";
 import { getScoresByJob } from "@/lib/db/client";
 import { refreshCompetitorCache, refreshProjectCache } from "@/lib/db/projects";
 import { enqueueScoreBatch } from "@/lib/queue/qstash";
-import { DEFAULT_WEIGHTS, ALL_DIMENSIONS, DIMENSION_LABELS } from "@/lib/types";
-import type { DimensionScores, PageScore, ScoreDimension } from "@/lib/types";
+import { DEFAULT_WEIGHTS, ALL_DIMENSIONS, DIMENSION_LABELS, ALL_BUCKETS, BUCKET_LABELS, isAiFetchLikely } from "@/lib/types";
+import type { DimensionScores, PageScore, ScoreDimension, IntentBucket } from "@/lib/types";
 import type { PageOptimizeState } from "@/lib/db/drafts";
 
 export const COMPETITOR_COLORS = ["#dc2626", "#ea580c", "#ca8a04", "#16a34a", "#0284c7"];
@@ -129,6 +129,35 @@ export function buildOptimizedRows(
       const db = b.simulated != null ? b.simulated - b.baseline : -Infinity;
       return db - da;
     });
+}
+
+// ── Crawl-forcing intent-bucket rollup (Optimize cards) ──────
+// Counts are real classifier output stored on page_scores; "fetchLikely"
+// applies the shared isAiFetchLikely bar (retrievable+citable avg ≥ 60
+// within a crawl-forcing bucket). intentBuckets === null means the page
+// was scored before the classifier existed and never backfilled.
+export interface BucketRollupEntry {
+  bucket: IntentBucket;
+  label: string;
+  count: number;
+  fetchLikely: number;
+}
+
+export function buildBucketRollup(clientScores: PageScore[]): {
+  buckets: BucketRollupEntry[];
+  unclassified: number;
+} {
+  const buckets = ALL_BUCKETS.map((b) => {
+    const inBucket = clientScores.filter((s) => (s.intentBuckets ?? []).includes(b));
+    return {
+      bucket: b,
+      label: BUCKET_LABELS[b],
+      count: inBucket.length,
+      fetchLikely: inBucket.filter((s) => isAiFetchLikely(s.intentBuckets, s.scores)).length,
+    };
+  });
+  const unclassified = clientScores.filter((s) => s.intentBuckets == null).length;
+  return { buckets, unclassified };
 }
 
 // ── Fix-first ranking (guided Overview) ──────────────────────
