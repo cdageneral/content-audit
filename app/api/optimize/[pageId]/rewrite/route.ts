@@ -15,6 +15,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { neon } from "@neondatabase/serverless";
 import { getPageForOptimize } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
+import { buildBrandContext } from "@/lib/brand/context";
 import { resolveAllTargets } from "@/lib/serp/visibility";
 import type { ResolvedTargets, VisibilityKeyword } from "@/lib/serp/visibility";
 import { DIMENSION_LABELS, ALL_DIMENSIONS } from "@/lib/types";
@@ -89,6 +90,17 @@ export async function POST(req: NextRequest, { params }: Params) {
       requestedVisTargets
     ).catch(() => ({ serp: [], prompts: [] } as ResolvedTargets));
 
+    // Brand & Context profile (Setup) — when active, the client-approved brand
+    // block rides along in the prompt so the rewrite adapts to voice,
+    // audience, terminology, and the approved-proof-point whitelist. A brand
+    // read failure must never block a rewrite → fall back to no block.
+    const brand = await buildBrandContext(bundle.projectId).catch(() => ({
+      block: "",
+      active: false,
+      sectionsOn: 0,
+      sectionsTotal: 4,
+    }));
+
     const prompt = buildRewritePrompt(
       bundle.page.url,
       title,
@@ -96,7 +108,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       bodyMd,
       targets,
       auditContext,
-      visTargets
+      visTargets,
+      brand.block
     );
 
     const anthropic = new Anthropic({
@@ -232,7 +245,8 @@ function buildRewritePrompt(
   bodyMd: string,
   targets: ScoreDimension[],
   ctx: AuditContext,
-  visTargets: ResolvedTargets = { serp: [], prompts: [] }
+  visTargets: ResolvedTargets = { serp: [], prompts: [] },
+  brandBlock = ""
 ): string {
   const targetBlocks = targets
     .map((dim) => {
@@ -296,7 +310,7 @@ ${targetBlocks || "(no stored findings — improve against the rubric definition
 ## Stored recommendations for these dimensions
 
 ${recs || "(none)"}
-${visBlock}${promptBlock}
+${visBlock}${promptBlock}${brandBlock ? `\n${brandBlock}` : ""}
 ## The page
 
 URL: ${url}
