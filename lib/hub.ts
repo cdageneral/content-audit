@@ -146,6 +146,7 @@ export interface BucketRollupEntry {
 export function buildBucketRollup(clientScores: PageScore[]): {
   buckets: BucketRollupEntry[];
   unclassified: number;
+  general: number;
 } {
   const buckets = ALL_BUCKETS.map((b) => {
     const inBucket = clientScores.filter((s) => (s.intentBuckets ?? []).includes(b));
@@ -157,7 +158,12 @@ export function buildBucketRollup(clientScores: PageScore[]): {
     };
   });
   const unclassified = clientScores.filter((s) => s.intentBuckets == null).length;
-  return { buckets, unclassified };
+  // General = every page in NO crawl-forcing bucket (classified-matched-none
+  // OR not yet classified), so the five cards account for every URL. Buckets
+  // are multi-label, so the four intent counts can overlap each other — but
+  // General never overlaps them.
+  const general = clientScores.filter((s) => (s.intentBuckets ?? []).length === 0).length;
+  return { buckets, unclassified, general };
 }
 
 // ── Fix-first ranking (guided Overview) ──────────────────────
