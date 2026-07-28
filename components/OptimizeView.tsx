@@ -59,27 +59,32 @@ export default function OptimizeView({
   projectId,
   buckets,
   unclassified,
+  general,
   optimizedRows,
   queue,
 }: {
   projectId: string;
   buckets: BucketCard[];
   unclassified: number;
+  /** Pages in NO crawl-forcing bucket — the "General" card, so every URL is accounted for. */
+  general: number;
   optimizedRows: (OptimizedRow & { buckets: IntentBucket[] | null })[];
   queue: QueueEntry[];
 }) {
-  const [active, setActive] = useState<IntentBucket | null>(null);
+  const [active, setActive] = useState<IntentBucket | 'general' | null>(null);
 
-  const inFilter = (b: IntentBucket[] | null) => active == null || (b ?? []).includes(active);
+  const inFilter = (b: IntentBucket[] | null) =>
+    active == null || (active === 'general' ? (b ?? []).length === 0 : (b ?? []).includes(active));
   const filteredOptimized = optimizedRows.filter((r) => inFilter(r.buckets));
   const filteredQueue = queue.filter((r) => inFilter(r.buckets));
-  const activeLabel = active ? buckets.find((b) => b.bucket === active)?.label : null;
+  const activeLabel =
+    active === 'general' ? 'General' : active ? buckets.find((b) => b.bucket === active)?.label : null;
   const hiddenOptimized = optimizedRows.length - filteredOptimized.length;
 
   return (
     <>
-      {/* ── Bucket cards ─────────────────────────────────── */}
-      <div className="anim-fade-up grid grid-cols-2 lg:grid-cols-4 gap-3">
+      {/* ── Bucket cards (4 crawl-forcing intents + General) ── */}
+      <div className="anim-fade-up grid grid-cols-2 lg:grid-cols-5 gap-3">
         {buckets.map((b) => {
           const on = active === b.bucket;
           return (
@@ -129,6 +134,42 @@ export default function OptimizeView({
             </button>
           );
         })}
+
+        {/* General — every page that matched no crawl-forcing bucket */}
+        <button
+          type="button"
+          onClick={() => setActive(active === 'general' ? null : 'general')}
+          aria-pressed={active === 'general'}
+          title={
+            active === 'general'
+              ? 'Clear the General filter'
+              : 'Show only pages that match no crawl-forcing intent type'
+          }
+          className="card relative p-3.5 text-left transition-all cursor-pointer"
+          style={
+            active === 'general'
+              ? { borderColor: 'rgba(99,102,241,0.5)', boxShadow: '0 0 0 1px rgba(99,102,241,0.35)' }
+              : undefined
+          }
+        >
+          {active === 'general' && (
+            <span className="absolute top-2.5 right-3 text-[10.5px] font-bold" style={{ color: '#4f46e5' }}>
+              ✕ clear
+            </span>
+          )}
+          <p className="text-xs font-bold flex items-center gap-1.5" style={{ color: 'var(--text-1)' }}>
+            <span aria-hidden="true">📄</span> General
+          </p>
+          <p className="text-[21px] font-extrabold mt-1 leading-none" style={{ color: 'var(--text-1)', letterSpacing: '-0.02em' }}>
+            {general}{' '}
+            <span className="text-xs font-semibold" style={{ color: 'var(--text-3)' }}>
+              page{general === 1 ? '' : 's'}
+            </span>
+          </p>
+          <p className="text-[11px] mt-1.5 leading-snug" style={{ color: 'var(--text-3)' }}>
+            Everything else — evergreen content that doesn&apos;t match a crawl-forcing intent type.
+          </p>
+        </button>
       </div>
 
       {/* ── Filter status / unclassified note ─────────────── */}
