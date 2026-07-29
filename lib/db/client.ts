@@ -190,6 +190,22 @@ export async function updateJobStatus(
       completed_at  = COALESCE(${completedAt?.toISOString() ?? null}::timestamptz, completed_at)
     WHERE id = ${id}
   `;
+
+  // ── Scheduled-scan finalize hook ──────────────────────────
+  // Every pipeline path that ends a job funnels through here, so this is
+  // the ONE place scheduled runs get closed out (summary, email, auto-
+  // pause). Jobs not started by the scheduler exit via a single UPDATE
+  // matching zero rows; any error is swallowed — schedule bookkeeping must
+  // never fail (or retry) a webhook batch. Dynamic import avoids a module
+  // cycle (finalize → getScoresByJob → this file).
+  if (status === "done" || status === "failed") {
+    try {
+      const { finalizeScheduledJob } = await import("@/lib/schedule/finalize");
+      await finalizeScheduledJob(id, status, extras.errorMessage);
+    } catch (err) {
+      console.error(`[schedule] finalize hook failed for job ${id}:`, err);
+    }
+  }
 }
 
 export async function incrementJobProgress(
