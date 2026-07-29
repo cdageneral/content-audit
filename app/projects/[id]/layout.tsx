@@ -49,6 +49,7 @@ export default async function ProjectLayout({
         needsWork={stats.needsWork}
         competitorCount={stats.competitorCount}
         brandActive={stats.brandActive}
+        scheduleState={stats.scheduleState}
       />
       <div className="flex-1 min-w-0">{children}</div>
     </div>
