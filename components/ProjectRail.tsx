@@ -26,6 +26,8 @@ interface RailProps {
   competitorCount: number;
   /** TRUE when a brand profile with at least one active section exists. */
   brandActive: boolean;
+  /** 'on' = scheduled scans enabled · 'paused' = auto-paused · 'off' = none. */
+  scheduleState: 'off' | 'on' | 'paused';
 }
 
 interface RailItem {
@@ -61,6 +63,7 @@ export default function ProjectRail({
   needsWork,
   competitorCount,
   brandActive,
+  scheduleState,
 }: RailProps) {
   const pathname = usePathname() || '';
   const base = `/projects/${projectId}`;
@@ -82,6 +85,27 @@ export default function ProjectRail({
       // writing is brand-steered; no badge before setup (the empty state on
       // the page itself is the call to action).
       badge: brandActive ? { text: 'On' } : null,
+    },
+    {
+      key: 'schedule',
+      label: 'Scan Schedule',
+      href: `${base}/schedule`,
+      match: 'prefix',
+      icon: ic(
+        // Clock — automatic re-scans on a cadence.
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 7v5l3 2" />
+        </>
+      ),
+      // "Paused" (amber) must be visible at a glance — it means scheduled
+      // scans stopped themselves and are waiting on a human.
+      badge:
+        scheduleState === 'paused'
+          ? { text: 'Paused', warn: true }
+          : scheduleState === 'on'
+            ? { text: 'On' }
+            : null,
     },
   ];
 
