@@ -307,6 +307,8 @@ export interface RailStats {
   competitorCount: number;
   /** TRUE when a brand profile exists with ≥1 enabled, non-empty section. */
   brandActive: boolean;
+  /** 'on' = schedule enabled · 'paused' = auto-paused after failures · 'off' = none/disabled. */
+  scheduleState: "off" | "on" | "paused";
   exists: boolean;
 }
 
@@ -316,7 +318,7 @@ export async function getRailStats(projectId: string): Promise<RailStats> {
     SELECT client_name, website_url FROM projects WHERE id = ${projectId}
   `.catch(() => [] as Record<string, unknown>[]);
   if (projRows.length === 0) {
-    return { clientName: "", websiteUrl: "", pageCount: 0, needsWork: 0, competitorCount: 0, brandActive: false, exists: false };
+    return { clientName: "", websiteUrl: "", pageCount: 0, needsWork: 0, competitorCount: 0, brandActive: false, scheduleState: "off", exists: false };
   }
   const jobRows = await sql`
     SELECT id FROM audit_jobs
@@ -346,6 +348,18 @@ export async function getRailStats(projectId: string): Promise<RailStats> {
   const brandActive = brandRows[0]
     ? summarizeBrandContext(sanitizeBrandProfile(brandRows[0].profile)).active
     : false;
+  // scan_schedules is lazily created by lib/schedule/store — before its
+  // first DDL run the query fails, which the catch reads as "no schedule".
+  const schedRows = await sql`
+    SELECT enabled, paused_reason FROM scan_schedules WHERE project_id = ${projectId}
+  `.catch(() => [] as Record<string, unknown>[]);
+  const scheduleState: RailStats["scheduleState"] = schedRows[0]
+    ? schedRows[0].enabled === true
+      ? "on"
+      : schedRows[0].paused_reason
+        ? "paused"
+        : "off"
+    : "off";
   return {
     clientName: String(projRows[0].client_name ?? ""),
     websiteUrl: String(projRows[0].website_url ?? ""),
@@ -353,6 +367,7 @@ export async function getRailStats(projectId: string): Promise<RailStats> {
     needsWork,
     competitorCount: (compRows[0]?.n as number) ?? 0,
     brandActive,
+    scheduleState,
     exists: true,
   };
 }
