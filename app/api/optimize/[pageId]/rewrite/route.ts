@@ -41,11 +41,14 @@ export async function POST(req: NextRequest, { params }: Params) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
+    // Any subset of the scored dimensions is a valid target set — the
+    // workbench lets the user check anywhere from 1 to all 10 (the old
+    // fixed "weakest 3" cap of 4 is gone).
     const targets = (Array.isArray(body.targetDimensions) ? body.targetDimensions : [])
       .filter((d: unknown): d is ScoreDimension =>
         typeof d === "string" && (ALL_DIMENSIONS as string[]).includes(d)
       )
-      .slice(0, 4);
+      .slice(0, ALL_DIMENSIONS.length);
     // Checked visibility targets (keywords only) — resolved server-side
     // against the stored SERP snapshot below, so the prompt only ever carries
     // real stored queries with their real volume/position.
