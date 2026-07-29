@@ -8,7 +8,7 @@
 //  rewrite actions, and the latest simulation result.
 // ─────────────────────────────────────────────────────────────
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ALL_DIMENSIONS,
@@ -465,12 +465,30 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     }
   }
 
-  const weakestDims = useMemo(() => {
-    if (!baseline) return [] as ScoreDimension[];
-    return [...ALL_DIMENSIONS]
-      .sort((a, b) => baseline.scores[a] - baseline.scores[b])
-      .slice(0, 3);
-  }, [baseline]);
+  // ── Rewrite dimension selection ──────────────────────────────
+  // Every dimension row carries a checkbox; the card-header button rewrites
+  // whatever subset is checked (replaces the old fixed "weakest 3"). All 10
+  // start checked; the per-dimension rewrite buttons inside expanded rows are
+  // unaffected by this selection.
+  const [checkedDims, setCheckedDims] = useState<Record<ScoreDimension, boolean>>(
+    () =>
+      Object.fromEntries(ALL_DIMENSIONS.map((d) => [d, true])) as Record<
+        ScoreDimension,
+        boolean
+      >
+  );
+  const selectedDims = useMemo(
+    () => ALL_DIMENSIONS.filter((d) => checkedDims[d]),
+    [checkedDims]
+  );
+  // Master "All" checkbox shows the half-checked state for partial selections.
+  const allDimsRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (allDimsRef.current) {
+      allDimsRef.current.indeterminate =
+        selectedDims.length > 0 && selectedDims.length < ALL_DIMENSIONS.length;
+    }
+  }, [selectedDims]);
 
   const exportHref = activeDraftId
     ? `/api/optimize/${pageId}/export?draftId=${activeDraftId}${
@@ -987,17 +1005,39 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
             <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between">
               <h3 className="text-sm font-semibold text-slate-700">Dimension Scores &amp; Insights</h3>
               {baseline && (
-                <button
-                  onClick={() => rewrite(weakestDims)}
-                  disabled={busy !== ""}
-                  className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-500 disabled:opacity-40"
-                >
-                  {busy === "rewrite" ? (
-                    <Working label="Writing…" secs={busySecs} />
-                  ) : (
-                    "✦ AI rewrite weakest 3"
-                  )}
-                </button>
+                <div className="flex items-center gap-3">
+                  <label
+                    className="flex items-center gap-1.5 text-[10.5px] font-medium text-slate-400 cursor-pointer select-none"
+                    title="Select or clear all dimensions"
+                  >
+                    <input
+                      ref={allDimsRef}
+                      type="checkbox"
+                      className="accent-indigo-600"
+                      checked={selectedDims.length === ALL_DIMENSIONS.length}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setCheckedDims(
+                          Object.fromEntries(
+                            ALL_DIMENSIONS.map((d) => [d, on])
+                          ) as Record<ScoreDimension, boolean>
+                        );
+                      }}
+                    />
+                    All
+                  </label>
+                  <button
+                    onClick={() => rewrite(selectedDims)}
+                    disabled={busy !== "" || selectedDims.length === 0}
+                    className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-500 disabled:opacity-40"
+                  >
+                    {busy === "rewrite" ? (
+                      <Working label="Writing…" secs={busySecs} />
+                    ) : (
+                      `✦ AI rewrite selected (${selectedDims.length})`
+                    )}
+                  </button>
+                </div>
               )}
             </div>
             {!baseline ? (
@@ -1018,10 +1058,24 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                     : "AI Accessibility";
                   return (
                     <div key={dim} className={`border-b border-slate-100 last:border-b-0 ${open ? "bg-indigo-50/30" : ""}`}>
-                      <button
-                        onClick={() => setExpanded(open ? null : dim)}
-                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition-colors"
-                      >
+                      <div className="w-full flex items-center gap-3 px-4 py-3 hover:bg-slate-50 transition-colors">
+                        {/* Row checkbox feeds the header "AI rewrite selected (n)"
+                            button; a checkbox can't live INSIDE the expand
+                            button (nested interactive elements), so the row is
+                            a flex div holding both. */}
+                        <input
+                          type="checkbox"
+                          className="accent-indigo-600 flex-shrink-0"
+                          checked={checkedDims[dim] === true}
+                          onChange={(e) =>
+                            setCheckedDims((c) => ({ ...c, [dim]: e.target.checked }))
+                          }
+                          aria-label={`Include ${DIMENSION_LABELS[dim]} in AI rewrite`}
+                        />
+                        <button
+                          onClick={() => setExpanded(open ? null : dim)}
+                          className="flex-1 min-w-0 flex items-center gap-3 text-left"
+                        >
                         <span className="text-slate-400 text-[10px] w-3">{open ? "▾" : "▸"}</span>
                         <span className="w-[124px] flex-shrink-0">
                           <span className="block text-[13px] font-semibold text-slate-700">{DIMENSION_LABELS[dim]}</span>
@@ -1039,7 +1093,8 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                         <span className={`w-10 text-right text-xs font-bold ${simScore == null || simScore === score ? "text-slate-300" : simScore > score ? "text-emerald-600" : "text-red-500"}`}>
                           {simScore == null || simScore === score ? "—" : simScore > score ? `+${simScore - score}` : `${simScore - score}`}
                         </span>
-                      </button>
+                        </button>
+                      </div>
                       {open && (
                         <div className="px-4 pb-4 space-y-2.5">
                           <InsightBox label="Why this score" text={baseline.rationale[dim] ?? "No rationale stored."} />
