@@ -247,12 +247,28 @@ function extractMetadata(
     $(".author").first().text().trim() ||
     undefined;
 
-  // Dates
-  const publishedDate =
+  // Dates. Three tiers, most explicit first — the winning tier is recorded in
+  // publishedSource so downstream consumers (publishing velocity) can say
+  // exactly how each date was obtained. Everything here is what the page
+  // itself claims; consumers validate range/parseability on read.
+  const metaPublished =
     $('meta[property="article:published_time"]').attr("content") ||
     $('time[datetime]').first().attr("datetime") ||
     $('meta[name="date"]').attr("content") ||
     undefined;
+  // NOTE: parsed from the RAW html string, not $ — parseHtml strips every
+  // <script> element (noise removal) before this runs, so the cheerio tree
+  // no longer contains ld+json blocks by the time metadata is extracted.
+  const jsonLdPublished = metaPublished ? undefined : extractJsonLdPublished(html);
+  const urlPublished = metaPublished || jsonLdPublished ? undefined : extractUrlDate(url);
+  const publishedDate = metaPublished || jsonLdPublished || urlPublished;
+  const publishedSource = metaPublished
+    ? "meta"
+    : jsonLdPublished
+      ? "jsonld"
+      : urlPublished
+        ? "url"
+        : undefined;
 
   const modifiedDate =
     $('meta[property="article:modified_time"]').attr("content") ||
@@ -290,6 +306,7 @@ function extractMetadata(
   return {
     author,
     publishedDate,
+    publishedSource,
     modifiedDate,
     canonicalUrl,
     ogTitle,
@@ -299,6 +316,74 @@ function extractMetadata(
     hasStructuredData,
     language,
   };
+}
+
+/**
+ * schema.org datePublished from any JSON-LD block on the page, including
+ * @graph containers. First hit wins; malformed blocks are skipped. This
+ * catches the many CMSes (WordPress + Yoast/RankMath among them) that emit
+ * datePublished in JSON-LD but no article:published_time meta tag.
+ *
+ * Works on the raw HTML string because the caller's cheerio tree has all
+ * <script> elements removed (noise stripping) by the time metadata runs.
+ */
+const LD_JSON_RE = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+
+function extractJsonLdPublished(html: string): string | undefined {
+  LD_JSON_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  let blocks = 0;
+  while ((m = LD_JSON_RE.exec(html)) !== null && blocks < 10) {
+    blocks++;
+    try {
+      const parsed = JSON.parse(m[1]);
+      const hit = findDatePublished(parsed, 0);
+      if (hit) return hit;
+    } catch {
+      // skip malformed block
+    }
+  }
+  return undefined;
+}
+
+function findDatePublished(node: unknown, depth: number): string | undefined {
+  if (depth > 4 || node === null || typeof node !== "object") return undefined;
+  if (Array.isArray(node)) {
+    for (const item of node) {
+      const hit = findDatePublished(item, depth + 1);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+  const obj = node as Record<string, unknown>;
+  const direct = obj.datePublished ?? obj.dateCreated;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+  for (const key of ["@graph", "mainEntity", "mainEntityOfPage", "itemListElement"]) {
+    const hit = findDatePublished(obj[key], depth + 1);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
+/**
+ * Date embedded in the URL path (/2026/07/ or /2026/07/14/ blog permalinks).
+ * Weakest tier — only consulted when the page offers nothing better. Day
+ * defaults to the 1st when the pattern only carries year/month.
+ */
+function extractUrlDate(url: string): string | undefined {
+  try {
+    const path = new URL(url).pathname;
+    const m = path.match(/\/(19|20)(\d{2})\/(\d{1,2})(?:\/(\d{1,2}))?(?=\/|$)/);
+    if (!m) return undefined;
+    const year = Number(`${m[1]}${m[2]}`);
+    const month = Number(m[3]);
+    const day = m[4] ? Number(m[4]) : 1;
+    if (month < 1 || month > 12 || day < 1 || day > 31) return undefined;
+    const iso = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    return Number.isNaN(Date.parse(iso)) ? undefined : iso;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildAuthHeaders(
