@@ -9,7 +9,9 @@ import { checkProjectAccess } from "@/lib/auth/access";
 import { getProjectDetail } from "@/lib/db/projects";
 import CompetitorMatrix from "@/components/CompetitorMatrix";
 import CompetitorManager from "@/components/CompetitorManager";
+import PublishingVelocity from "@/components/PublishingVelocity";
 import { COMPETITOR_COLORS, getLatestScores } from "@/lib/hub";
+import { buildVelocityData, type VelocityData } from "@/lib/velocity/rollup";
 import type { DimensionScores } from "@/lib/types";
 
 export const revalidate = 0;
@@ -25,6 +27,20 @@ export default async function ProjectCompetitorsPage({
   if (!project) return notFound();
 
   const { latestScoresMap, clientScores, hasResults } = await getLatestScores(params.id);
+
+  // Publishing velocity (observed data only) — best-effort: the panel shows
+  // its own "builds from your next scan" state when there's no inventory, and
+  // a rollup failure must never take down the matrix above it.
+  const velocity: VelocityData =
+    project.competitors.length > 0
+      ? await buildVelocityData(project).catch(() => ({
+          entities: [],
+          monthLabels: [],
+          hasInventory: false,
+          newPages: [],
+          anyDiffReady: false,
+        }))
+      : { entities: [], monthLabels: [], hasInventory: false, newPages: [], anyDiffReady: false };
 
   // Previous-run averages per site (for the matrix ▲/▼ tickers) — history is
   // ordered ASC; the second-to-last point per site is "last run".
@@ -106,6 +122,9 @@ export default async function ProjectCompetitorsPage({
           />
         </div>
       )}
+
+      {/* Publishing velocity — new additive panel; the matrix above is untouched. */}
+      {project.competitors.length > 0 && <PublishingVelocity data={velocity} />}
     </div>
   );
 }
