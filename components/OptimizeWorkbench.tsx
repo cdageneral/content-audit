@@ -499,6 +499,23 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     () => ALL_DIMENSIONS.filter((d) => checkedDims[d]),
     [checkedDims]
   );
+  // Research queue: per-dimension count of CHECKED fetched findings. Findings
+  // ride into the full AI Rewrite for every dimension that is itself checked;
+  // a fetched-but-unchecked dimension is shown so the user can see why its
+  // findings would be left out.
+  const researchQueue = useMemo(
+    () =>
+      ALL_DIMENSIONS.filter((d) => research[d]).map((d) => ({
+        dim: d,
+        count: research[d]!.suggestions.filter((_, i) => checkedSug[`${d}:${i}`]).length,
+        dimChecked: checkedDims[d] === true,
+      })),
+    [research, checkedSug, checkedDims]
+  );
+  const queuedFindings = useMemo(
+    () => researchQueue.filter((r) => r.dimChecked).reduce((s, r) => s + r.count, 0),
+    [researchQueue]
+  );
   // Master "All" checkbox shows the half-checked state for partial selections.
   const allDimsRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -1064,12 +1081,50 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                     {busy === "rewrite" ? (
                       <Working label="Writing…" secs={busySecs} />
                     ) : (
-                      `✦ AI rewrite selected (${selectedDims.length})`
+                      `✦ AI rewrite selected (${selectedDims.length})${
+                        queuedFindings > 0
+                          ? ` · ${queuedFindings} finding${queuedFindings !== 1 ? "s" : ""}`
+                          : ""
+                      }`
                     )}
                   </button>
                 </div>
               )}
             </div>
+            {/* Research queue strip: every fetched dimension and how many of
+                its findings are checked. Makes it visible that the FULL AI
+                rewrite consumes the queue — fetching is not a dead end into
+                the per-dimension section generator. */}
+            {researchQueue.length > 0 && (
+              <div className="mx-4 mt-3 flex items-center gap-x-2 gap-y-1 flex-wrap rounded-lg border border-indigo-100 bg-indigo-50/60 px-3 py-2">
+                <span className="text-[9.5px] font-bold uppercase tracking-wide text-indigo-500">
+                  🔎 Research queued
+                </span>
+                {researchQueue.map(({ dim, count, dimChecked }) => (
+                  <span
+                    key={dim}
+                    title={
+                      dimChecked
+                        ? `${count} checked finding${count !== 1 ? "s" : ""} from ${DIMENSION_LABELS[dim]} will be included in the AI rewrite`
+                        : `${DIMENSION_LABELS[dim]} is unchecked above — check it to include its findings in the AI rewrite`
+                    }
+                    className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9.5px] font-semibold whitespace-nowrap ${
+                      dimChecked && count > 0
+                        ? "border-indigo-200 bg-white text-indigo-700"
+                        : "border-slate-200 bg-slate-50 text-slate-400"
+                    }`}
+                  >
+                    {DIMENSION_LABELS[dim]} {count}
+                    {!dimChecked && " · unchecked"}
+                  </span>
+                ))}
+                <span className="text-[9.5px] text-indigo-600">
+                  {queuedFindings > 0
+                    ? `→ ${queuedFindings} finding${queuedFindings !== 1 ? "s" : ""} will feed the AI rewrite`
+                    : "→ check findings (and their dimension) to feed the AI rewrite"}
+                </span>
+              </div>
+            )}
             {nudgeDims && nudgeDims.length > 0 && (
               <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
                 <p className="text-xs text-amber-800">
@@ -1301,6 +1356,11 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                   </span>
                                 </label>
                               ))}
+                              <p className="text-[10px] text-indigo-600">
+                                ✦ Your checked findings are queued for the full AI
+                                rewrite at the top of this card — fetch more
+                                dimensions, then run it once to use everything.
+                              </p>
                               <div className="flex items-center justify-between gap-2 flex-wrap">
                                 <span className="text-[10px] text-slate-400">
                                   Every suggestion carries its source. Nothing is invented.
@@ -1312,16 +1372,17 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                     research[dim]!.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`])
                                       .length === 0
                                   }
-                                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+                                  title={`Appends one standalone cited section for ${DIMENSION_LABELS[dim]} only — it does not touch the rest of the page. To improve everything at once, use the full AI rewrite at the top of the card.`}
+                                  className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
                                 >
                                   {busy === "generate" ? (
                                     <Working label="Writing…" secs={busySecs} />
                                   ) : (
-                                    `Generate Copy from Selected (${
+                                    `＋ Add as new section (${
                                       research[dim]!.suggestions.filter(
                                         (_, i) => checkedSug[`${dim}:${i}`]
                                       ).length
-                                    })`
+                                    }) — ${DIMENSION_LABELS[dim]} only`
                                   )}
                                 </button>
                               </div>
