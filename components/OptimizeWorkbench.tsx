@@ -211,6 +211,12 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   // chooses "Continue anyway" or goes and fetches first.
   const [nudgeDims, setNudgeDims] = useState<ScoreDimension[] | null>(null);
   const [checkedSug, setCheckedSug] = useState<Record<string, boolean>>({});
+  // Dims whose findings were explicitly "Added to rewrite queue". Only queued
+  // dims feed the AI Rewrite — the drawer's single action button is the gate.
+  const [queuedDims, setQueuedDims] = useState<Partial<Record<ScoreDimension, boolean>>>({});
+  // After accepting a full-rewrite proposal, auto-run Simulate once the new
+  // body has committed to state (rewrite → accept → save+simulate in one flow).
+  const [pendingAutoSim, setPendingAutoSim] = useState(false);
 
   // The URL-level scorecard is read-only stored SERP data; the prompt rows
   // below it are live (generation / per-page check runs re-render from the
@@ -351,13 +357,14 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     setBusy("rewrite");
     setError("");
     setNudgeDims(null);
-    // Checked 🔎 research findings ride along as dim → [sourceUrl] pairs.
+    // Queued 🔎 research findings ride along as dim → [sourceUrl] pairs.
+    // Only dims the user explicitly "Added to rewrite queue" are included.
     // The server re-validates every URL against the stored research cache
     // before anything enters the prompt — we never send suggestion text.
     const researchSelections: Record<string, string[]> = {};
     for (const dim of dims) {
       const state = research[dim];
-      if (!state) continue;
+      if (!state || !queuedDims[dim]) continue;
       const urls = state.suggestions
         .filter((_, i) => checkedSug[`${dim}:${i}`])
         .map((s) => s.sourceUrl);
@@ -418,35 +425,6 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     }
   }
 
-  async function generateCopy(dim: ScoreDimension) {
-    const state = research[dim];
-    if (!state) return;
-    const selected = state.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`]);
-    if (selected.length === 0) return;
-    setBusy("generate");
-    setError("");
-    try {
-      const res = await fetch(`/api/optimize/${pageId}/generate`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          dimension: dim,
-          selected,
-          title: editor.title,
-          metaDescription: editor.metaDescription,
-          bodyMd: editor.bodyMd,
-        }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
-      setProposal({ dims: [dim], markdown: data.markdown as string, mode: "append" });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Copy generation failed");
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function verifyPublished() {
     if (!activeDraftId || !activeSim) return;
     setBusy("verify");
@@ -499,23 +477,31 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     () => ALL_DIMENSIONS.filter((d) => checkedDims[d]),
     [checkedDims]
   );
-  // Research queue: per-dimension count of CHECKED fetched findings. Findings
-  // ride into the full AI Rewrite for every dimension that is itself checked;
-  // a fetched-but-unchecked dimension is shown so the user can see why its
-  // findings would be left out.
+  // The rewrite queue: dims explicitly added via "Add to rewrite queue", with
+  // the live count of their checked findings. A queued-but-unchecked dim is
+  // shown so the user can see why its findings would be left out.
   const researchQueue = useMemo(
     () =>
-      ALL_DIMENSIONS.filter((d) => research[d]).map((d) => ({
+      ALL_DIMENSIONS.filter((d) => research[d] && queuedDims[d]).map((d) => ({
         dim: d,
         count: research[d]!.suggestions.filter((_, i) => checkedSug[`${d}:${i}`]).length,
         dimChecked: checkedDims[d] === true,
       })),
-    [research, checkedSug, checkedDims]
+    [research, checkedSug, checkedDims, queuedDims]
   );
   const queuedFindings = useMemo(
     () => researchQueue.filter((r) => r.dimChecked).reduce((s, r) => s + r.count, 0),
     [researchQueue]
   );
+  // Accepting a full AI Rewrite proposal sets pendingAutoSim; once the new
+  // body text has committed, run Simulate automatically (it saves the draft
+  // first), so "AI Rewrite" = rewrite → accept → score in one flow.
+  useEffect(() => {
+    if (!pendingAutoSim) return;
+    setPendingAutoSim(false);
+    void simulate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingAutoSim]);
   // Master "All" checkbox shows the half-checked state for partial selections.
   const allDimsRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -1061,33 +1047,6 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                     />
                     All
                   </label>
-                  <button
-                    onClick={() => {
-                      // Soft nudge: any checked research-capable dim with no
-                      // fetched data yet? Offer to fetch first — no silent
-                      // extra API calls, no silent skipping either.
-                      const missing = selectedDims.filter(
-                        (d) => RESEARCH_DIMS[d] && !research[d]
-                      );
-                      if (missing.length > 0) {
-                        setNudgeDims(missing);
-                        return;
-                      }
-                      rewrite(selectedDims);
-                    }}
-                    disabled={busy !== "" || selectedDims.length === 0}
-                    className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-500 disabled:opacity-40"
-                  >
-                    {busy === "rewrite" ? (
-                      <Working label="Writing…" secs={busySecs} />
-                    ) : (
-                      `✦ AI rewrite selected (${selectedDims.length})${
-                        queuedFindings > 0
-                          ? ` · ${queuedFindings} finding${queuedFindings !== 1 ? "s" : ""}`
-                          : ""
-                      }`
-                    )}
-                  </button>
                 </div>
               )}
             </div>
@@ -1120,54 +1079,9 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                 ))}
                 <span className="text-[9.5px] text-indigo-600">
                   {queuedFindings > 0
-                    ? `→ ${queuedFindings} finding${queuedFindings !== 1 ? "s" : ""} will feed the AI rewrite`
-                    : "→ check findings (and their dimension) to feed the AI rewrite"}
+                    ? `→ ${queuedFindings} finding${queuedFindings !== 1 ? "s" : ""} ready for the AI Rewrite below`
+                    : "→ check findings (and their dimension) to feed the AI Rewrite"}
                 </span>
-              </div>
-            )}
-            {nudgeDims && nudgeDims.length > 0 && (
-              <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
-                <p className="text-xs text-amber-800">
-                  <span className="font-semibold">
-                    {nudgeDims.length === 1
-                      ? `${DIMENSION_LABELS[nudgeDims[0]]} has`
-                      : `${nudgeDims.length} selected dimensions have`}{" "}
-                    live web research you haven&apos;t fetched yet
-                  </span>{" "}
-                  ({nudgeDims.map((d) => DIMENSION_LABELS[d]).join(", ")}).
-                  Fetching real questions, edge cases, and sources first gives
-                  the rewrite verified material to work with instead of only
-                  the stored audit critique.
-                </p>
-                <div className="mt-2 flex gap-2">
-                  <button
-                    onClick={() => {
-                      // "Fetch first" does what it says: open the first
-                      // unfetched dimension and start its fetch immediately.
-                      const first = nudgeDims[0];
-                      setExpanded(first);
-                      setNudgeDims(null);
-                      fetchResearch(first);
-                    }}
-                    disabled={busy !== ""}
-                    className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50 transition-colors"
-                  >
-                    🔎 Fetch first
-                  </button>
-                  <button
-                    onClick={() => rewrite(selectedDims)}
-                    disabled={busy !== ""}
-                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50 transition-colors"
-                  >
-                    Continue anyway
-                  </button>
-                  <button
-                    onClick={() => setNudgeDims(null)}
-                    className="px-2 py-1 text-[11px] font-medium text-amber-600 hover:text-amber-800"
-                  >
-                    Cancel
-                  </button>
-                </div>
               </div>
             )}
             {!baseline ? (
@@ -1213,9 +1127,9 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                         </span>
                         {/* Fixed-width 🔎 slot on EVERY row so the score bars
                             stay aligned; only research-capable dims render
-                            the chip. Before fetch: a clickable "Fetch live
-                            data" action (expands the row AND starts the
-                            fetch). After fetch: "n found" (emerald). */}
+                            the chip. Three states: "Fetch live data" (click =
+                            expand + fetch) → "n found" (fetched, awaiting Add
+                            to queue) → "n added" (in the rewrite queue). */}
                         <span className="w-[96px] flex-shrink-0">
                           {RESEARCH_DIMS[dim] && (
                             <span
@@ -1231,20 +1145,25 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                 }
                               }}
                               title={
-                                research[dim]
-                                  ? `${research[dim]!.suggestions.length} live web finding${research[dim]!.suggestions.length !== 1 ? "s" : ""} fetched — expand to review and select`
+                                queuedDims[dim]
+                                  ? `${research[dim]!.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`]).length} finding${research[dim]!.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`]).length !== 1 ? "s" : ""} in the rewrite queue — expand to adjust`
+                                  : research[dim]
+                                  ? `${research[dim]!.suggestions.length} live web finding${research[dim]!.suggestions.length !== 1 ? "s" : ""} fetched — expand to select and add to the rewrite queue`
                                   : "Click to fetch real data for this dimension (questions, edge cases, sources) from the live web"
                               }
                               className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold whitespace-nowrap ${
-                                research[dim]
+                                queuedDims[dim]
                                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : research[dim]
+                                  ? "border-amber-200 bg-amber-50 text-amber-700"
                                   : "border-indigo-200 bg-indigo-50 text-indigo-600 cursor-pointer hover:bg-indigo-100 hover:border-indigo-300"
                               }`}
                             >
-                              🔎{" "}
-                              {research[dim]
-                                ? `${research[dim]!.suggestions.length} found`
-                                : "Fetch live data"}
+                              {queuedDims[dim]
+                                ? `✓ ${research[dim]!.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`]).length} added`
+                                : research[dim]
+                                ? `🔎 ${research[dim]!.suggestions.length} found`
+                                : "🔎 Fetch live data"}
                             </span>
                           )}
                         </span>
@@ -1278,23 +1197,16 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                           {activeSim?.rationale?.[dim] && (
                             <InsightBox label="Simulated rationale" text={activeSim.rationale[dim]} accent />
                           )}
-                          <div className="flex gap-2 flex-wrap">
-                            <button
-                              onClick={() => rewrite([dim])}
-                              disabled={busy !== ""}
-                              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
-                            >
-                              {busy === "rewrite" ? (
-                                <Working label="Writing…" secs={busySecs} />
-                              ) : (
-                                `✦ AI Rewrite for ${DIMENSION_LABELS[dim]}`
-                              )}
-                            </button>
-                            {RESEARCH_DIMS[dim] && !research[dim] && (
+                          {/* One action per drawer: fetch (if research-capable
+                              and not yet fetched). Rewriting happens ONCE, from
+                              the AI Rewrite button below the card — no per-dim
+                              rewrite buttons. */}
+                          {RESEARCH_DIMS[dim] && !research[dim] && (
+                            <div className="flex gap-2 flex-wrap">
                               <button
                                 onClick={() => fetchResearch(dim)}
                                 disabled={busy !== ""}
-                                className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
                               >
                                 {busy === "research" ? (
                                   <Working label="Searching the web…" secs={busySecs} />
@@ -1302,8 +1214,8 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                   RESEARCH_DIMS[dim]!.button
                                 )}
                               </button>
-                            )}
-                          </div>
+                            </div>
+                          )}
 
                           {RESEARCH_DIMS[dim] && research[dim] && (
                             <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
@@ -1356,34 +1268,37 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                                   </span>
                                 </label>
                               ))}
-                              <p className="text-[10px] text-indigo-600">
-                                ✦ Your checked findings are queued for the full AI
-                                rewrite at the top of this card — fetch more
-                                dimensions, then run it once to use everything.
-                              </p>
                               <div className="flex items-center justify-between gap-2 flex-wrap">
                                 <span className="text-[10px] text-slate-400">
                                   Every suggestion carries its source. Nothing is invented.
                                 </span>
                                 <button
-                                  onClick={() => generateCopy(dim)}
+                                  onClick={() => {
+                                    // The drawer's one action: queue this
+                                    // dim's checked findings for the AI
+                                    // Rewrite and collapse, so the user moves
+                                    // on to the next dimension.
+                                    setQueuedDims((q) => ({ ...q, [dim]: true }));
+                                    setExpanded(null);
+                                  }}
                                   disabled={
-                                    busy !== "" ||
                                     research[dim]!.suggestions.filter((_, i) => checkedSug[`${dim}:${i}`])
                                       .length === 0
                                   }
-                                  title={`Appends one standalone cited section for ${DIMENSION_LABELS[dim]} only — it does not touch the rest of the page. To improve everything at once, use the full AI rewrite at the top of the card.`}
-                                  className="rounded-lg border border-indigo-200 bg-white px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
+                                  title="Adds the checked findings to the rewrite queue and collapses this drawer — run AI Rewrite below when you've queued everything you want."
+                                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
                                 >
-                                  {busy === "generate" ? (
-                                    <Working label="Writing…" secs={busySecs} />
-                                  ) : (
-                                    `＋ Add as new section (${
-                                      research[dim]!.suggestions.filter(
-                                        (_, i) => checkedSug[`${dim}:${i}`]
-                                      ).length
-                                    }) — ${DIMENSION_LABELS[dim]} only`
-                                  )}
+                                  {queuedDims[dim]
+                                    ? `✓ Update queue (${
+                                        research[dim]!.suggestions.filter(
+                                          (_, i) => checkedSug[`${dim}:${i}`]
+                                        ).length
+                                      })`
+                                    : `＋ Add to rewrite queue (${
+                                        research[dim]!.suggestions.filter(
+                                          (_, i) => checkedSug[`${dim}:${i}`]
+                                        ).length
+                                      })`}
                                 </button>
                               </div>
                             </div>
@@ -1397,13 +1312,91 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
             )}
           </div>
 
-          {/* Simulate — runs the production scoring engine on the current draft
-              (auto-saves first). Save Draft now lives under the editor. */}
-          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
+          {/* The two workbench actions. AI Rewrite is THE primary CTA: it
+              rewrites every checked dimension using everything in the research
+              queue, and simulates automatically once the proposal is accepted.
+              Simulate Score stays available on its own for hand edits. */}
+          <div className="rounded-xl border border-slate-200 bg-white px-4 py-3 space-y-2">
+            {nudgeDims && nudgeDims.length > 0 && (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs text-amber-800">
+                  <span className="font-semibold">
+                    {nudgeDims.length === 1
+                      ? `${DIMENSION_LABELS[nudgeDims[0]]} has`
+                      : `${nudgeDims.length} selected dimensions have`}{" "}
+                    live web research you haven&apos;t fetched yet
+                  </span>{" "}
+                  ({nudgeDims.map((d) => DIMENSION_LABELS[d]).join(", ")}).
+                  Fetching real questions, edge cases, and sources first gives
+                  the rewrite verified material to work with instead of only
+                  the stored audit critique.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      // "Fetch first" does what it says: open the first
+                      // unfetched dimension and start its fetch immediately.
+                      const first = nudgeDims[0];
+                      setExpanded(first);
+                      setNudgeDims(null);
+                      fetchResearch(first);
+                    }}
+                    disabled={busy !== ""}
+                    className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50 transition-colors"
+                  >
+                    🔎 Fetch first
+                  </button>
+                  <button
+                    onClick={() => rewrite(selectedDims)}
+                    disabled={busy !== ""}
+                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                  >
+                    Continue anyway
+                  </button>
+                  <button
+                    onClick={() => setNudgeDims(null)}
+                    className="px-2 py-1 text-[11px] font-medium text-amber-600 hover:text-amber-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+            <button
+              onClick={() => {
+                // Soft nudge: any checked research-capable dim with nothing
+                // fetched yet? Offer to fetch first — no silent API calls,
+                // no silent skipping either.
+                const missing = selectedDims.filter(
+                  (d) => RESEARCH_DIMS[d] && !research[d]
+                );
+                if (missing.length > 0) {
+                  setNudgeDims(missing);
+                  return;
+                }
+                rewrite(selectedDims);
+              }}
+              disabled={busy !== "" || selectedDims.length === 0}
+              className="w-full rounded-lg bg-indigo-600 px-3.5 py-2.5 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+            >
+              {busy === "rewrite" ? (
+                <Working label="Writing…" secs={busySecs} />
+              ) : (
+                `✦ AI Rewrite (${selectedDims.length} dimension${selectedDims.length !== 1 ? "s" : ""}${
+                  queuedFindings > 0
+                    ? ` · ${queuedFindings} queued finding${queuedFindings !== 1 ? "s" : ""}`
+                    : ""
+                })`
+              )}
+            </button>
+            <p className="text-[10px] text-slate-400 text-center">
+              Rewrites the checked dimensions using your queued research, then
+              simulates the score automatically when you accept the proposal.
+            </p>
             <button
               onClick={simulate}
               disabled={busy !== ""}
-              className="w-full rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-500 disabled:opacity-50 transition-colors"
+              className="w-full rounded-lg border border-indigo-200 bg-white px-3.5 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-50 transition-colors"
             >
               {busy === "simulate" ? (
                 <Working label="Simulating…" secs={busySecs} />
@@ -1446,6 +1439,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
               </button>
               <button
                 onClick={() => {
+                  const fullRewrite = proposal.mode !== "append";
                   update(
                     "bodyMd",
                     proposal.mode === "append"
@@ -1454,6 +1448,9 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                   );
                   setProposal(null);
                   setTab("content");
+                  // Accepting a full rewrite rolls straight into save +
+                  // simulate (the effect fires after the new body commits).
+                  if (fullRewrite) setPendingAutoSim(true);
                 }}
                 className="rounded-lg bg-indigo-600 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-500"
               >
