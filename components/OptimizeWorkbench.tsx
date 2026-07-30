@@ -1087,10 +1087,15 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                 <div className="mt-2 flex gap-2">
                   <button
                     onClick={() => {
-                      setExpanded(nudgeDims[0]);
+                      // "Fetch first" does what it says: open the first
+                      // unfetched dimension and start its fetch immediately.
+                      const first = nudgeDims[0];
+                      setExpanded(first);
                       setNudgeDims(null);
+                      fetchResearch(first);
                     }}
-                    className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-500 transition-colors"
+                    disabled={busy !== ""}
+                    className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-500 disabled:opacity-50 transition-colors"
                   >
                     🔎 Fetch first
                   </button>
@@ -1153,26 +1158,38 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                         </span>
                         {/* Fixed-width 🔎 slot on EVERY row so the score bars
                             stay aligned; only research-capable dims render
-                            the chip. Before fetch: "Live data" (indigo).
-                            After fetch: "n found" (emerald). */}
-                        <span className="w-[76px] flex-shrink-0">
+                            the chip. Before fetch: a clickable "Fetch live
+                            data" action (expands the row AND starts the
+                            fetch). After fetch: "n found" (emerald). */}
+                        <span className="w-[96px] flex-shrink-0">
                           {RESEARCH_DIMS[dim] && (
                             <span
+                              onClick={(e) => {
+                                // Explicit fetch from the collapsed row: stop
+                                // the expand-button toggle, open this dim, and
+                                // start the research fetch in one click.
+                                if (!research[dim] && busy === "") {
+                                  e.stopPropagation();
+                                  e.preventDefault();
+                                  setExpanded(dim);
+                                  fetchResearch(dim);
+                                }
+                              }}
                               title={
                                 research[dim]
                                   ? `${research[dim]!.suggestions.length} live web finding${research[dim]!.suggestions.length !== 1 ? "s" : ""} fetched — expand to review and select`
-                                  : "Live web research available — expand this dimension and fetch real data (questions, edge cases, sources)"
+                                  : "Click to fetch real data for this dimension (questions, edge cases, sources) from the live web"
                               }
                               className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold whitespace-nowrap ${
                                 research[dim]
                                   ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                  : "border-indigo-200 bg-indigo-50 text-indigo-600"
+                                  : "border-indigo-200 bg-indigo-50 text-indigo-600 cursor-pointer hover:bg-indigo-100 hover:border-indigo-300"
                               }`}
                             >
                               🔎{" "}
                               {research[dim]
                                 ? `${research[dim]!.suggestions.length} found`
-                                : "Live data"}
+                                : "Fetch live data"}
                             </span>
                           )}
                         </span>
