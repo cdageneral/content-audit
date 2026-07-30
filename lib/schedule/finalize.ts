@@ -215,12 +215,17 @@ export async function finalizeScheduledJob(
     (schedule.sendMode === "always" || somethingMoved);
 
   if (wantsEmail && schedule) {
+    // Observed first-seen competitor URLs (velocity ingest runs before this
+    // hook in updateJobStatus). Best-effort — [] on any failure.
+    const { getNewCompetitorPagesForEmail } = await import("@/lib/velocity/rollup");
+    const newCompetitorPages = await getNewCompetitorPagesForEmail(projectId);
     const { subject, html } = buildScanEmailHtml({
       projectName: name,
       projectUrl: appUrl(`/projects/${projectId}`),
       runDate: new Date(),
       summary,
       movers,
+      newCompetitorPages,
     });
     emailStatus = await sendScanEmail({
       to: schedule.recipients,

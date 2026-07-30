@@ -73,14 +73,28 @@ function deltaLine(d: PageDelta): string {
     </tr>`;
 }
 
+export interface NewCompetitorPage {
+  name: string;
+  url: string;
+  /** ISO — page-stated publish date (or sitemap lastmod), when one was found. */
+  publishedAt: string | null;
+}
+
 export function buildScanEmailHtml(input: {
   projectName: string;
   projectUrl: string; // absolute link into the app
   runDate: Date;
   summary: ScanRunSummary;
   movers: PageDelta[];
+  /**
+   * Competitor URLs first seen in this scan (observed first-seen diff from
+   * content_inventory — only populated once a baseline scan exists). Optional
+   * so existing callers are untouched.
+   */
+  newCompetitorPages?: NewCompetitorPage[];
 }): { subject: string; html: string } {
   const { projectName, projectUrl, summary, movers } = input;
+  const newCompetitorPages = input.newCompetitorPages ?? [];
   const moved = summary.improved + summary.declined > 0 || summary.changed > 0;
 
   const scoreLine =
@@ -105,6 +119,33 @@ export function buildScanEmailHtml(input: {
     <div style="padding:16px 26px;border-bottom:1px solid #f3f4f6">
       <p style="margin:0 0 9px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;font-weight:700">Biggest movers</p>
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${movers.map(deltaLine).join("")}</table>
+    </div>`
+      : "";
+
+  const newPageLine = (p: NewCompetitorPage): string => {
+    const path = (() => {
+      try {
+        return new URL(p.url).pathname || p.url;
+      } catch {
+        return p.url;
+      }
+    })();
+    const when = p.publishedAt
+      ? new Date(p.publishedAt).toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" })
+      : "";
+    return `
+    <tr>
+      <td style="padding:6px 0;font-size:13px;color:#111827;word-break:break-all"><b>${esc(p.name)}</b> <span style="color:#4b5563">${esc(path)}</span></td>
+      <td style="padding:6px 0 6px 12px;font-size:13px;text-align:right;white-space:nowrap;color:${GRAY}">${esc(when)}</td>
+    </tr>`;
+  };
+
+  const newPagesHtml =
+    newCompetitorPages.length > 0
+      ? `
+    <div style="padding:16px 26px;border-bottom:1px solid #f3f4f6">
+      <p style="margin:0 0 9px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#9ca3af;font-weight:700">New competitor pages since last scan</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0">${newCompetitorPages.map(newPageLine).join("")}</table>
     </div>`
       : "";
 
@@ -137,7 +178,7 @@ export function buildScanEmailHtml(input: {
         <div style="font-size:18px;font-weight:700;color:#ffffff">Scheduled scan complete — ${esc(projectName)}</div>
         <div style="font-size:13px;color:#c7c9dd;margin-top:4px">${summary.pages} page${summary.pages === 1 ? "" : "s"} scored · ${summary.changed} changed since the last scan</div>
       </td></tr>
-      <tr><td>${summaryBlock}${moversHtml}
+      <tr><td>${summaryBlock}${moversHtml}${newPagesHtml}
         <div style="padding:20px 26px;text-align:center">
           <a href="${esc(projectUrl)}" style="display:inline-block;background:#4f46e5;color:#ffffff;font-weight:700;font-size:13.5px;border-radius:9px;padding:10px 22px;text-decoration:none">Open the full results →</a>
         </div>
