@@ -99,6 +99,13 @@ export interface CrawledPage {
 export interface PageMetadata {
   author?: string;
   publishedDate?: string;
+  /**
+   * Where publishedDate was read from: 'meta' (article:published_time /
+   * <time> / meta[name=date]), 'jsonld' (schema.org datePublished), or
+   * 'url' (a /YYYY/MM/ path pattern). Lets downstream consumers (the
+   * publishing-velocity panel) say honestly how each date was obtained.
+   */
+  publishedSource?: string;
   modifiedDate?: string;
   canonicalUrl?: string;
   ogTitle?: string;
