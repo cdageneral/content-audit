@@ -198,6 +198,22 @@ export async function updateJobStatus(
   // matching zero rows; any error is swallowed — schedule bookkeeping must
   // never fail (or retry) a webhook batch. Dynamic import avoids a module
   // cycle (finalize → getScoresByJob → this file).
+  // ── Publishing-velocity ingest hook ───────────────────────
+  // On success, record the job's observed URL set (crawl + sitemap) into
+  // content_inventory so the Competitors tab can chart publishing velocity.
+  // Runs BEFORE the schedule finalize below on purpose: the scan email's
+  // "new competitor pages" section reads what this writes. Same contract as
+  // the finalize hook — dynamic import, errors swallowed, never fails (or
+  // retries) a webhook batch. Idempotent per job.
+  if (status === "done") {
+    try {
+      const { ingestVelocityForJob } = await import("@/lib/velocity/ingest");
+      await ingestVelocityForJob(id);
+    } catch (err) {
+      console.error(`[velocity] ingest hook failed for job ${id}:`, err);
+    }
+  }
+
   if (status === "done" || status === "failed") {
     try {
       const { finalizeScheduledJob } = await import("@/lib/schedule/finalize");

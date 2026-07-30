@@ -215,6 +215,7 @@ export async function deleteProject(id: string): Promise<void> {
     () => sql`DELETE FROM brand_sources WHERE project_id = ${id}`,
     () => sql`DELETE FROM scan_schedules WHERE project_id = ${id}`,
     () => sql`DELETE FROM scan_schedule_runs WHERE project_id = ${id}`,
+    () => sql`DELETE FROM content_inventory WHERE project_id = ${id}`,
   ];
   for (const run of cleanups) {
     await run().catch(() => null);
@@ -343,6 +344,9 @@ export async function deleteCompetitor(id: string): Promise<void> {
     sql`DELETE FROM audit_jobs WHERE competitor_id = ${id}`,
     sql`DELETE FROM competitor_configs WHERE id = ${id}`,
   ]);
+  // Best-effort: the lazily-created publishing-velocity inventory is FK-free,
+  // so it can only orphan, never block — same pattern as deleteProject.
+  await sql`DELETE FROM content_inventory WHERE competitor_id = ${id}`.catch(() => null);
 }
 
 // ── Score history ─────────────────────────────────────────────
