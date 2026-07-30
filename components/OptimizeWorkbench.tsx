@@ -206,6 +206,10 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
     mode: "replace" | "append";
   } | null>(null);
   const [research, setResearch] = useState<Partial<Record<ScoreDimension, ResearchState>>>({});
+  // Soft pre-rewrite nudge: checked research-capable dims with nothing
+  // fetched yet. Set when the header rewrite button is clicked; the user
+  // chooses "Continue anyway" or goes and fetches first.
+  const [nudgeDims, setNudgeDims] = useState<ScoreDimension[] | null>(null);
   const [checkedSug, setCheckedSug] = useState<Record<string, boolean>>({});
 
   // The URL-level scorecard is read-only stored SERP data; the prompt rows
@@ -346,6 +350,19 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
   async function rewrite(dims: ScoreDimension[]) {
     setBusy("rewrite");
     setError("");
+    setNudgeDims(null);
+    // Checked 🔎 research findings ride along as dim → [sourceUrl] pairs.
+    // The server re-validates every URL against the stored research cache
+    // before anything enters the prompt — we never send suggestion text.
+    const researchSelections: Record<string, string[]> = {};
+    for (const dim of dims) {
+      const state = research[dim];
+      if (!state) continue;
+      const urls = state.suggestions
+        .filter((_, i) => checkedSug[`${dim}:${i}`])
+        .map((s) => s.sourceUrl);
+      if (urls.length > 0) researchSelections[dim] = urls;
+    }
     try {
       const res = await fetch(`/api/optimize/${pageId}/rewrite`, {
         method: "POST",
@@ -353,6 +370,7 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
         body: JSON.stringify({
           targetDimensions: dims,
           visibilityTargets: activeTargets,
+          researchSelections,
           title: editor.title,
           metaDescription: editor.metaDescription,
           bodyMd: editor.bodyMd,
@@ -1027,7 +1045,19 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                     All
                   </label>
                   <button
-                    onClick={() => rewrite(selectedDims)}
+                    onClick={() => {
+                      // Soft nudge: any checked research-capable dim with no
+                      // fetched data yet? Offer to fetch first — no silent
+                      // extra API calls, no silent skipping either.
+                      const missing = selectedDims.filter(
+                        (d) => RESEARCH_DIMS[d] && !research[d]
+                      );
+                      if (missing.length > 0) {
+                        setNudgeDims(missing);
+                        return;
+                      }
+                      rewrite(selectedDims);
+                    }}
                     disabled={busy !== "" || selectedDims.length === 0}
                     className="text-[11px] font-semibold text-indigo-600 hover:text-indigo-500 disabled:opacity-40"
                   >
@@ -1040,6 +1070,46 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                 </div>
               )}
             </div>
+            {nudgeDims && nudgeDims.length > 0 && (
+              <div className="mx-4 mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <p className="text-xs text-amber-800">
+                  <span className="font-semibold">
+                    {nudgeDims.length === 1
+                      ? `${DIMENSION_LABELS[nudgeDims[0]]} has`
+                      : `${nudgeDims.length} selected dimensions have`}{" "}
+                    live web research you haven&apos;t fetched yet
+                  </span>{" "}
+                  ({nudgeDims.map((d) => DIMENSION_LABELS[d]).join(", ")}).
+                  Fetching real questions, edge cases, and sources first gives
+                  the rewrite verified material to work with instead of only
+                  the stored audit critique.
+                </p>
+                <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={() => {
+                      setExpanded(nudgeDims[0]);
+                      setNudgeDims(null);
+                    }}
+                    className="rounded-md bg-amber-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-amber-500 transition-colors"
+                  >
+                    🔎 Fetch first
+                  </button>
+                  <button
+                    onClick={() => rewrite(selectedDims)}
+                    disabled={busy !== ""}
+                    className="rounded-md border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold text-amber-700 hover:bg-amber-100 disabled:opacity-50 transition-colors"
+                  >
+                    Continue anyway
+                  </button>
+                  <button
+                    onClick={() => setNudgeDims(null)}
+                    className="px-2 py-1 text-[11px] font-medium text-amber-600 hover:text-amber-800"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             {!baseline ? (
               <p className="p-4 text-xs" style={{ color: "var(--text-3)" }}>
                 No completed audit found for this page yet — run an audit first.
@@ -1080,6 +1150,31 @@ export default function OptimizeWorkbench(props: WorkbenchProps) {
                         <span className="w-[124px] flex-shrink-0">
                           <span className="block text-[13px] font-semibold text-slate-700">{DIMENSION_LABELS[dim]}</span>
                           <span className="block text-[9.5px] text-slate-400">{group}</span>
+                        </span>
+                        {/* Fixed-width 🔎 slot on EVERY row so the score bars
+                            stay aligned; only research-capable dims render
+                            the chip. Before fetch: "Live data" (indigo).
+                            After fetch: "n found" (emerald). */}
+                        <span className="w-[76px] flex-shrink-0">
+                          {RESEARCH_DIMS[dim] && (
+                            <span
+                              title={
+                                research[dim]
+                                  ? `${research[dim]!.suggestions.length} live web finding${research[dim]!.suggestions.length !== 1 ? "s" : ""} fetched — expand to review and select`
+                                  : "Live web research available — expand this dimension and fetch real data (questions, edge cases, sources)"
+                              }
+                              className={`inline-flex items-center rounded-full border px-1.5 py-0.5 text-[9px] font-semibold whitespace-nowrap ${
+                                research[dim]
+                                  ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                  : "border-indigo-200 bg-indigo-50 text-indigo-600"
+                              }`}
+                            >
+                              🔎{" "}
+                              {research[dim]
+                                ? `${research[dim]!.suggestions.length} found`
+                                : "Live data"}
+                            </span>
+                          )}
                         </span>
                         <span className="flex-1 h-1.5 rounded-full bg-slate-100 relative overflow-hidden">
                           <span
