@@ -13,7 +13,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import Anthropic from "@anthropic-ai/sdk";
 import { neon } from "@neondatabase/serverless";
-import { getPageForOptimize } from "@/lib/db/drafts";
+import { getPageForOptimize, getLatestResearch } from "@/lib/db/drafts";
+import type { ResearchSuggestion } from "@/lib/db/drafts";
 import { SCORING_SYSTEM_PROMPT } from "@/lib/scoring/prompt";
 import { buildBrandContext } from "@/lib/brand/context";
 import { resolveAllTargets } from "@/lib/serp/visibility";
@@ -57,6 +58,14 @@ export async function POST(req: NextRequest, { params }: Params) {
           .filter((t): t is string => typeof t === "string")
           .slice(0, 12)
       : [];
+    // Selected live-research findings (checked 🔎 suggestions). The client
+    // only sends dim → [sourceUrl] pairs; every item is re-validated below
+    // against the stored research cache for this page, so the prompt never
+    // carries a finding the research pipeline didn't actually verify.
+    const rawResearchSelections =
+      body.researchSelections && typeof body.researchSelections === "object"
+        ? (body.researchSelections as Record<string, unknown>)
+        : {};
     const title = typeof body.title === "string" ? body.title : "";
     const metaDescription =
       typeof body.metaDescription === "string" ? body.metaDescription : "";
@@ -87,6 +96,13 @@ export async function POST(req: NextRequest, { params }: Params) {
     // the model optimizes against the authoritative stored audit — not
     // whatever a client chose to send).
     const auditContext = await loadAuditContext(params.pageId, targets);
+    // Server-validated research findings: only suggestions that exist in the
+    // stored research cache (by exact sourceUrl) survive into the prompt.
+    const researchFindings = await loadSelectedResearch(
+      params.pageId,
+      targets,
+      rawResearchSelections
+    ).catch(() => ({} as Partial<Record<ScoreDimension, ResearchSuggestion[]>>));
     const visTargets = await resolveAllTargets(
       bundle.page.url,
       bundle.projectId,
@@ -112,7 +128,8 @@ export async function POST(req: NextRequest, { params }: Params) {
       targets,
       auditContext,
       visTargets,
-      brand.block
+      brand.block,
+      researchFindings
     );
 
     const anthropic = new Anthropic({
@@ -231,12 +248,40 @@ async function loadAuditContext(
   return out;
 }
 
+// ── Selected live research ────────────────────────────────────
+//  The workbench sends { [dimension]: [sourceUrl, ...] } for the 🔎
+//  suggestions the user checked. We NEVER trust client-sent text: each
+//  sourceUrl is matched against the stored research cache for this page
+//  and dimension, and only the stored suggestion (title/summary/source as
+//  the research pipeline verified them) enters the prompt.
+
+async function loadSelectedResearch(
+  pageId: string,
+  targets: ScoreDimension[],
+  raw: Record<string, unknown>
+): Promise<Partial<Record<ScoreDimension, ResearchSuggestion[]>>> {
+  const out: Partial<Record<ScoreDimension, ResearchSuggestion[]>> = {};
+  for (const dim of targets) {
+    const sel = raw[dim];
+    if (!Array.isArray(sel) || sel.length === 0) continue;
+    const wanted = new Set(
+      sel.filter((u): u is string => typeof u === "string" && u.length > 0).slice(0, 12)
+    );
+    if (wanted.size === 0) continue;
+    const stored = await getLatestResearch(pageId, dim).catch(() => null);
+    if (!stored) continue;
+    const items = stored.suggestions.filter((s) => wanted.has(s.sourceUrl)).slice(0, 8);
+    if (items.length > 0) out[dim] = items;
+  }
+  return out;
+}
+
 // ── Prompts ───────────────────────────────────────────────────
 
 const REWRITE_SYSTEM = `You are a senior content editor improving a web page so it scores higher on a specific LLM-readiness audit. You will be given the audit's exact scoring rubric, the page's current audit findings, and the current content in markdown.
 
 Hard rules — violating any of these makes the output unusable:
-1. NEVER invent facts, statistics, dates, prices, quotes, study results, customer names, or sources. Every factual claim in your output must already exist in the provided content, or be clearly generic knowledge with no specific attribution. If a section would benefit from data the content doesn't have, write a bracketed placeholder like [ADD: 2025 pricing from your rate sheet] instead of inventing it.
+1. NEVER invent facts, statistics, dates, prices, quotes, study results, customer names, or sources. Every factual claim in your output must already exist in the provided content, come from a provided live-research finding (attribute those with an inline markdown link to their exact source URL), or be clearly generic knowledge with no specific attribution. If a section would benefit from data the content doesn't have, write a bracketed placeholder like [ADD: 2025 pricing from your rate sheet] instead of inventing it.
 2. Preserve the page's meaning, offer, and every existing factual claim. You are restructuring and strengthening, not changing what the business says.
 3. Keep the author's voice. Match the existing register (formal/casual, first/third person). Write like an experienced human writer: varied sentence lengths, concrete wording, no filler. Avoid formulaic AI patterns — no "In today's digital landscape", "It's important to note", "delve", "unlock", no forced parallel triads, and don't turn flowing prose into wall-to-wall bullet lists.
 4. Output ONLY the rewritten page content as markdown (headings with #/##/###, links as [text](url)). No preamble, no explanation of changes, no code fences around the whole document.`;
@@ -249,7 +294,8 @@ function buildRewritePrompt(
   targets: ScoreDimension[],
   ctx: AuditContext,
   visTargets: ResolvedTargets = { serp: [], prompts: [] },
-  brandBlock = ""
+  brandBlock = "",
+  researchFindings: Partial<Record<ScoreDimension, ResearchSuggestion[]>> = {}
 ): string {
   const targetBlocks = targets
     .map((dim) => {
@@ -292,6 +338,30 @@ ${serpTargets
 For each target query, make sure the rewrite contains a clear, self-contained, quotable passage that directly and completely answers it (a heading matching the query's intent plus a direct answer in the first sentence works well). Draw only on facts already in the content — where real data is needed, use an [ADD: …] placeholder per rule 1.\n`
     : "";
 
+  // User-selected live web research (already server-validated against the
+  // stored research cache). Same source-attribution contract as the
+  // generate route: real findings, real URLs, inline citations.
+  const researchDims = (Object.keys(researchFindings) as ScoreDimension[]).filter(
+    (d) => (researchFindings[d] ?? []).length > 0
+  );
+  const researchBlock = researchDims.length
+    ? `\n## Live web research findings (user-selected, source-verified)
+
+These findings came from real web searches run for this page; each carries the exact source it was found in. Weave the relevant ones into the rewrite where they strengthen the named dimension — answer the real questions found, cover the documented edge cases, cite the authoritative sources. Attribute every claim taken from a finding with an inline markdown link to its exact source URL, e.g. "according to [Source Title](https://…)". Use ONLY what each finding states — do not extend it with facts of your own.
+
+${researchDims
+        .map(
+          (d) =>
+            `### For ${DIMENSION_LABELS[d]}:\n${(researchFindings[d] ?? [])
+              .map(
+                (s, i) =>
+                  `${i + 1}. ${s.title}\n   What the source says: ${s.summary}\n   Source: ${s.sourceTitle} — ${s.sourceUrl}`
+              )
+              .join("\n")}`
+        )
+        .join("\n\n")}\n`
+    : "";
+
   const promptBlock = visTargets.prompts.length
     ? `\n## LLM prompt targets (verified checks against ChatGPT/Perplexity/Gemini/Claude)
 
@@ -313,7 +383,7 @@ ${targetBlocks || "(no stored findings — improve against the rubric definition
 ## Stored recommendations for these dimensions
 
 ${recs || "(none)"}
-${visBlock}${promptBlock}${brandBlock ? `\n${brandBlock}` : ""}
+${visBlock}${researchBlock}${promptBlock}${brandBlock ? `\n${brandBlock}` : ""}
 ## The page
 
 URL: ${url}
