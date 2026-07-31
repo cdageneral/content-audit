@@ -48,6 +48,44 @@ export async function discoverUrls(opts: DiscoveryOptions): Promise<string[]> {
   return [...bfsUrls].sort();
 }
 
+// ── Why-did-discovery-find-nothing probe ──────────────────────
+//
+//  Discovery returning [] is ambiguous: an empty site and a site that
+//  403s every request look identical to the caller. The crawl phase has
+//  had block detection since 2026-07-13, but a site that refuses its
+//  sitemap AND its homepage never reaches the crawl phase — it dies here.
+//  One extra request on the failure path buys an honest error message.
+
+/** Statuses that mean "the server refused the crawler", not "nothing here". */
+const BLOCK_STATUSES = new Set([401, 403, 407, 429, 451, 503]);
+
+export interface SiteAccessProbe {
+  /** HTTP status of the root URL, or null if the request never completed. */
+  status: number | null;
+  /** True when the site actively refused us (or we could not connect at all). */
+  blocked: boolean;
+}
+
+/**
+ * Fetch the root URL once, with the same browser-shaped headers discovery
+ * uses, purely to find out WHY discovery came back empty. Never throws.
+ */
+export async function probeSiteAccess(rootUrl: string): Promise<SiteAccessProbe> {
+  const headers = buildAuthHeaders();
+  try {
+    const res = await fetch(rootUrl, {
+      headers,
+      redirect: "follow",
+      signal: AbortSignal.timeout(12_000),
+    });
+    return { status: res.status, blocked: BLOCK_STATUSES.has(res.status) };
+  } catch {
+    // DNS failure, TLS reset, timeout — from the user's point of view the
+    // site is unreachable, which is the same actionable finding as a 403.
+    return { status: null, blocked: true };
+  }
+}
+
 // ── Sitemap discovery ─────────────────────────────────────────
 
 async function tryDiscoverFromSitemap(

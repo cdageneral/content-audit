@@ -9,7 +9,10 @@
 //  blocks the AI crawlers" as a verifiable finding.
 // ─────────────────────────────────────────────────────────────
 
-export type AiBotStatus = "allowed" | "blocked" | "partial";
+// "unknown" = we could not READ robots.txt (403/401/429/5xx/network), so
+// access is UNVERIFIED. That is deliberately NOT the same as "allowed" —
+// conflating the two printed a false all-clear into client reports.
+export type AiBotStatus = "allowed" | "blocked" | "partial" | "unknown";
 
 export interface AiBotAccess {
   name: string;
@@ -24,6 +27,12 @@ export interface AiCrawlerAccess {
   checkedAt: string;
   origin: string;
   robotsFound: boolean;
+  /** false = the request for robots.txt was REFUSED (403/401/429/5xx/network),
+   *  so nothing about crawler access is known. Optional for back-compat with
+   *  ai_access rows written before 2026-07-31 (undefined ⇒ treat as reachable). */
+  robotsReachable?: boolean;
+  /** HTTP status the robots.txt request returned, null if it never connected. */
+  robotsStatus?: number | null;
   llmsTxtFound: boolean;
   bots: AiBotAccess[];
 }
@@ -138,10 +147,17 @@ async function fetchTextWithTimeout(
 const looksLikeHtml = (text: string): boolean =>
   /^\s*(<!doctype|<html|<head|<body)/i.test(text.slice(0, 300));
 
+/** Statuses that mean "the server refused us", not "the file isn't there". */
+const REFUSAL_STATUSES = new Set([401, 403, 407, 429, 451]);
+
 /**
  * Check a site's AI-crawler access. Never throws — returns null only if
- * the input URL itself is unparsable. A missing/unfetchable robots.txt
- * means crawlers are allowed by default (that IS the finding).
+ * the input URL itself is unparsable.
+ *
+ * Three outcomes, deliberately distinct:
+ *   • robots.txt read      → evaluate each bot against its rules
+ *   • robots.txt ABSENT    → crawlers allowed by default (that IS the finding)
+ *   • robots.txt REFUSED   → "unknown"; we know nothing and must not imply we do
  */
 export async function checkAiCrawlerAccess(siteUrl: string): Promise<AiCrawlerAccess | null> {
   let origin: string;
@@ -160,6 +176,12 @@ export async function checkAiCrawlerAccess(siteUrl: string): Promise<AiCrawlerAc
     robotsRes != null && robotsRes.status === 200 && !looksLikeHtml(robotsRes.text);
   const groups = robotsFound ? parseRobots(robotsRes.text) : [];
 
+  // A 404 is a real answer ("no robots.txt") — a 403 or a dead connection is not.
+  const robotsReachable =
+    robotsRes != null &&
+    !REFUSAL_STATUSES.has(robotsRes.status) &&
+    robotsRes.status < 500;
+
   const llmsTxtFound =
     llmsRes != null && llmsRes.status === 200 && llmsRes.text.trim().length > 0 && !looksLikeHtml(llmsRes.text);
 
@@ -167,7 +189,18 @@ export async function checkAiCrawlerAccess(siteUrl: string): Promise<AiCrawlerAc
     checkedAt: new Date().toISOString(),
     origin,
     robotsFound,
+    robotsReachable,
+    robotsStatus: robotsRes?.status ?? null,
     llmsTxtFound,
-    bots: AI_BOTS.map((b) => (robotsFound ? evaluateBot(groups, b) : { name: b, status: "allowed" as AiBotStatus, matchedGroup: null, sampleRule: null })),
+    bots: AI_BOTS.map((b) =>
+      robotsFound
+        ? evaluateBot(groups, b)
+        : {
+            name: b,
+            status: (robotsReachable ? "allowed" : "unknown") as AiBotStatus,
+            matchedGroup: null,
+            sampleRule: null,
+          }
+    ),
   };
 }
