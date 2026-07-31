@@ -232,6 +232,7 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
                 Of {totalDated} dated URLs across all sites, {totalFromPage} carry a date on the page
                 itself; the rest use the sitemap&apos;s lastmod value. Once a site has two scans, new
                 URLs are also confirmed by which scan they first appeared in.
+                {data.scopeNote ? ` ${data.scopeNote}` : ""}
               </p>
             </div>
           )}
