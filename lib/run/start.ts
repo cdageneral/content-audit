@@ -14,7 +14,7 @@
 
 import { getProjectDetail } from "@/lib/db/projects";
 import { createJob, updateJobStatus, setJobAiAccess } from "@/lib/db/client";
-import { discoverUrls } from "@/lib/crawler/discover";
+import { discoverUrls, probeSiteAccess } from "@/lib/crawler/discover";
 import { checkAiCrawlerAccess } from "@/lib/crawler/ai-access";
 import { enqueueCrawlBatches } from "@/lib/queue/qstash";
 import { neon } from "@neondatabase/serverless";
@@ -27,6 +27,44 @@ export interface StartRunResult {
   error?: string;
   clientJobId?: string;
   jobs?: { type: "client" | "competitor"; id: string; competitorId?: string }[];
+}
+
+/** "https://www.chip.ca/foo" → "chip.ca" — for human-readable error text. */
+function hostLabel(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url;
+  }
+}
+
+/**
+ * Discovery came back empty. Say WHY, in words a user can act on.
+ *
+ * Before 2026-07-31 every empty result produced the same opaque line
+ * ("No URLs discovered for client site") whether the site was empty or
+ * hard-403ing the crawler, and the run route still returned 200 — so the
+ * Run button flashed and the page came back unchanged. The phrase
+ * "blocks automated crawling" is kept verbatim: other surfaces key off it.
+ */
+async function explainNoUrls(url: string, fromList: boolean): Promise<string> {
+  if (fromList) return "No valid URLs in the uploaded list";
+  const label = hostLabel(url);
+  const probe = await probeSiteAccess(url).catch(() => null);
+  if (probe?.blocked) {
+    const code = probe.status ? `HTTP ${probe.status}` : "no response";
+    return (
+      `${label} blocks automated crawling (${code}). Every request for its ` +
+      `sitemap and its homepage was refused, so no pages could be discovered. ` +
+      `Ask the site owner to allow our crawler, or switch this project to a ` +
+      `URL list you can supply directly.`
+    );
+  }
+  const seen = probe?.status ? ` (homepage returned HTTP ${probe.status})` : "";
+  return (
+    `No URLs discovered for ${label}${seen} — no sitemap was found at the usual ` +
+    `locations and no internal links were followed from the homepage.`
+  );
 }
 
 export async function startProjectRun(
@@ -101,16 +139,17 @@ export async function startProjectRun(
     });
   }
 
+  // A zero-URL client run is a REAL failure and must be reported as one.
+  // We still run the competitors below (their data is independently useful),
+  // then return ok:false at the end carrying this message.
+  let clientError: string | null = null;
+
   if (clientUrls.length > 0) {
     await updateJobStatus(clientJob.id, "crawling", { totalPages: clientUrls.length });
     await enqueueCrawlBatches(clientJob.id, clientUrls, null);
   } else {
-    await updateJobStatus(clientJob.id, "failed", {
-      errorMessage:
-        project.auditSource === "list"
-          ? "No valid URLs in the uploaded list"
-          : "No URLs discovered for client site",
-    });
+    clientError = await explainNoUrls(project.websiteUrl, project.auditSource === "list");
+    await updateJobStatus(clientJob.id, "failed", { errorMessage: clientError });
   }
 
   jobIds.push({ type: "client", id: clientJob.id });
@@ -152,12 +191,22 @@ export async function startProjectRun(
         await enqueueCrawlBatches(compJob.id, compUrls, null);
       } else {
         await updateJobStatus(compJob.id, "failed", {
-          errorMessage: `No URLs discovered for ${competitor.name}`,
+          errorMessage: await explainNoUrls(competitor.url, false),
         });
       }
 
       jobIds.push({ type: "competitor", id: compJob.id, competitorId: competitor.id });
     }
+  }
+
+  if (clientError) {
+    return {
+      ok: false,
+      status: 502,
+      error: clientError,
+      clientJobId: clientJob.id,
+      jobs: jobIds,
+    };
   }
 
   return { ok: true, status: 200, clientJobId: clientJob.id, jobs: jobIds };
