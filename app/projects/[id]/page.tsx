@@ -19,6 +19,7 @@ import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
 import AiCrawlerTile from "@/components/AiCrawlerTile";
 import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
+import { getRankRollup } from "@/lib/rankings/rollup";
 import { getPromptRows } from "@/lib/db/prompts";
 import { serpConfigured } from "@/lib/serp/semrush";
 import { dfsConfigured } from "@/lib/serp/dataforseo";
@@ -91,6 +92,14 @@ export default async function ProjectOverviewPage({
     serpRollup = await getSerpRollup(serpJobId).catch(() => null);
     serpSummaries = await getSerpPageSummaries(serpJobId).catch(() => undefined);
   }
+
+  // Traditional Google rankings (2026-07-31) — observed organic positions
+  // from the same stored snapshots; zero extra API calls.
+  const rankRollup = serpJobId ? await getRankRollup(params.id).catch(() => null) : null;
+  const rankAvgDelta =
+    rankRollup && rankRollup.avgPosition !== null && rankRollup.prevAvgPosition !== null
+      ? Math.round((rankRollup.prevAvgPosition - rankRollup.avgPosition) * 10) / 10
+      : null;
 
   // LLM prompts roll-up (management lives on the workbench — URL-level model).
   const promptRows = await getPromptRows(params.id).catch(() => []);
@@ -337,6 +346,21 @@ export default async function ProjectOverviewPage({
                   {DIMENSION_LABELS[weakestDim.dimension as ScoreDimension]} ({weakestDim.averageScore})
                 </p>
               )}
+              {rankRollup && rankRollup.ranked > 0 && (
+                <p className="text-xs mt-1.5" style={{ color: "var(--text-2)" }}>
+                  <span className="font-semibold" style={{ color: "#4f46e5" }}>Google:</span>{" "}
+                  {rankRollup.top10} of {rankRollup.tracked} keywords in the top 10 · avg position{" "}
+                  {rankRollup.avgPosition}
+                  {rankAvgDelta !== null && rankAvgDelta !== 0 && (
+                    <span
+                      className="font-semibold"
+                      style={{ color: rankAvgDelta > 0 ? "#059669" : "#dc2626" }}
+                    >
+                      {" "}({rankAvgDelta > 0 ? `▲${rankAvgDelta}` : `▼${Math.abs(rankAvgDelta)}`})
+                    </span>
+                  )}
+                </p>
+              )}
             </div>
           </div>
         )}
@@ -481,10 +505,10 @@ export default async function ProjectOverviewPage({
             href={`/projects/${params.id}/visibility`}
             className="anim-fade-up stagger-3 card card-interactive p-4 block"
           >
-            <p className="text-xs font-bold" style={{ color: "var(--text-1)" }}>🔍 AI Visibility</p>
+            <p className="text-xs font-bold" style={{ color: "var(--text-1)" }}>🔍 Visibility</p>
             <p className="text-[13px] mt-1.5 leading-relaxed" style={{ color: "var(--text-2)" }}>
               {serpRollup
-                ? `Cited in ${serpRollup.aioCitedKws} of ${serpRollup.aioTriggeredKws} AI Overview keywords · you own ${serpRollup.paaQuestionsOwned} of ${serpRollup.paaQuestionsTotal} PAA questions${promptSummary && promptSummary.checked > 0 ? ` · ${promptSummary.cited} of ${promptSummary.checked} checked LLM prompts cite you` : ""}.`
+                ? `Cited in ${serpRollup.aioCitedKws} of ${serpRollup.aioTriggeredKws} AI Overview keywords · you own ${serpRollup.paaQuestionsOwned} of ${serpRollup.paaQuestionsTotal} PAA questions${rankRollup && rankRollup.ranked > 0 ? ` · ${rankRollup.top10} of ${rankRollup.tracked} keywords rank top-10 in Google` : ""}${promptSummary && promptSummary.checked > 0 ? ` · ${promptSummary.cited} of ${promptSummary.checked} checked LLM prompts cite you` : ""}.`
                 : serpEnabled
                   ? "No search visibility data yet — it's pulled automatically with each audit run."
                   : "Search visibility isn't configured — add a DataForSEO or Semrush key to pull AIO + PAA data."}
