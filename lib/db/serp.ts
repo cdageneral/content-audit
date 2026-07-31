@@ -431,6 +431,10 @@ export interface SerpPageSummary {
   aioCited: number;
   paaPresent: number;
   paaOwned: number;
+  /** Best organic position among non-branded ranked keywords (0 = none). */
+  bestPosition: number;
+  /** Non-branded keywords with an organic position captured (pre-slice). */
+  rankedKeywords: number;
   keywords: SerpKeywordDetail[];
   questions: { question: string; covered: boolean; sourceDomain: string | null }[];
 }
@@ -523,12 +527,17 @@ export async function getSerpPageSummaries(
     );
 
     const nb = details.filter((d) => !d.branded);
+    // Traditional-rank facts (2026-07-31): computed BEFORE the 15-row slice
+    // so the Pages table can show the full picture, not the slice's.
+    const nbRanked = nb.filter((d) => d.position > 0);
     out[pageUrl] = {
       primaryKeyword: (snap.primary_keyword as string) ?? null,
       aioTriggered: nb.filter((d) => d.aioTriggered).length,
       aioCited: nb.filter((d) => d.aioCited).length,
       paaPresent: nb.filter((d) => d.paaPresent).length,
       paaOwned: nb.filter((d) => d.paaOwned).length,
+      bestPosition: nbRanked.length > 0 ? Math.min(...nbRanked.map((d) => d.position)) : 0,
+      rankedKeywords: nbRanked.length,
       keywords: details.slice(0, 15),
       questions: qs
         .filter((q) => q.snapshot_id === snapId)
