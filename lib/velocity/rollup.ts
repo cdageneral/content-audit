@@ -30,6 +30,29 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const MONTHS_SHOWN = 12;
 const WEEKS_SHOWN = 26;
 
+// ── Sitemap-lastmod trust test ────────────────────────────────
+//  A sitemap <lastmod> means "this URL changed", NOT "this URL was
+//  published". Sites that regenerate templates bump every lastmod at once,
+//  which would read as an enormous publishing spike (observed live
+//  2026-07-30: one competitor's 1,127 sitemap URLs all carried recent
+//  lastmods → "375.7 pages/mo", which is modification noise, not output).
+//
+//  So lastmod dates are counted only when their distribution looks like
+//  real publishing. Two deterministic disqualifiers, both computed from
+//  stored rows — no model, no external call:
+//    A. BULK — half or more land inside a single 14-day window.
+//    B. NO HISTORY — 80%+ sit inside the last 180 days. A site with this
+//       many URLs and no older content isn't showing publish history.
+//  Page-stated dates (JSON-LD / meta / dated URL) are always trusted and
+//  are never affected by this test.
+const LASTMOD_MIN_SAMPLE = 25; // below this, clustering is noise
+const CLUSTER_WINDOW_DAYS = 14;
+const CLUSTER_SHARE = 0.5;
+const HISTORY_WINDOW_DAYS = 180;
+const HISTORY_SHARE = 0.8;
+
+export type LastmodReason = "bulk" | "no_history";
+
 export interface VelocityEntityData {
   key: string; // 'client' | competitor id
   name: string;
@@ -38,7 +61,7 @@ export interface VelocityEntityData {
   isClient: boolean;
   /** URLs known for this site (crawl + sitemap union). */
   total: number;
-  /** URLs with a usable date (page-extracted or sitemap lastmod). */
+  /** URLs counted in the charts below (page-dated, plus lastmod when trusted). */
   dated: number;
   /** Subset of `dated` whose date came from the page itself. */
   datedFromPage: number;
@@ -53,6 +76,52 @@ export interface VelocityEntityData {
   avgScore: number | null;
   /** True once this site has a pre-existing baseline to diff against. */
   diffReady: boolean;
+  /** False when this site's sitemap lastmod dates failed the trust test. */
+  lastmodTrusted: boolean;
+  /** How many lastmod-only URLs were excluded from the counts above. */
+  lastmodExcluded: number;
+  /** Why they were excluded, for the UI note. */
+  lastmodReason: LastmodReason | null;
+}
+
+interface LastmodVerdict {
+  trusted: boolean;
+  reason: LastmodReason | null;
+}
+
+/**
+ * Decide whether a site's sitemap lastmod dates may be counted as publish
+ * dates. Pure function over the observed date sets — deterministic, and it
+ * fails toward the conservative answer (excluding lastmod narrows the count,
+ * it never invents one).
+ */
+export function assessLastmod(
+  pageDatedCount: number,
+  lastmodDates: Date[],
+  nowMs: number
+): LastmodVerdict {
+  const n = lastmodDates.length;
+  if (n < LASTMOD_MIN_SAMPLE) return { trusted: true, reason: null };
+  // Page-stated dates are the stronger signal. When the site gives us at
+  // least as many of those, lastmod is a minor supplement — leave it alone.
+  if (pageDatedCount >= n) return { trusted: true, reason: null };
+
+  const times = lastmodDates.map((d) => d.getTime()).sort((a, b) => a - b);
+
+  // A. Densest 14-day window (sliding, on sorted timestamps).
+  let densest = 0;
+  let left = 0;
+  for (let i = 0; i < times.length; i++) {
+    while (times[i] - times[left] > CLUSTER_WINDOW_DAYS * DAY_MS) left++;
+    densest = Math.max(densest, i - left + 1);
+  }
+  if (densest / n >= CLUSTER_SHARE) return { trusted: false, reason: "bulk" };
+
+  // B. Share sitting inside the last 180 days.
+  const recent = times.filter((t) => nowMs - t <= HISTORY_WINDOW_DAYS * DAY_MS).length;
+  if (recent / n >= HISTORY_SHARE) return { trusted: false, reason: "no_history" };
+
+  return { trusted: true, reason: null };
 }
 
 export interface NewPageRow {
@@ -173,22 +242,28 @@ export async function buildVelocityData(project: ProjectDetail): Promise<Velocit
     const rows = byEntity.get(def.key) ?? [];
     const monthly = new Array<number>(MONTHS_SHOWN).fill(0);
     const weekly = new Array<number>(WEEKS_SHOWN).fill(0);
-    let dated = 0;
-    let datedFromPage = 0;
     let count90 = 0;
     let countPrev90 = 0;
 
+    // Partition observed dates by provenance, then decide whether this site's
+    // lastmod values may be counted at all (see assessLastmod above).
+    const pageDates: Date[] = [];
+    const lastmodDates: Date[] = [];
     for (const row of rows) {
-      const best = bestDate(row);
-      if (!best) continue;
-      dated++;
-      if (best.source === "page") datedFromPage++;
+      if (row.publishedAt) pageDates.push(row.publishedAt);
+      else if (row.lastmod) lastmodDates.push(row.lastmod);
+    }
+    const verdict = assessLastmod(pageDates.length, lastmodDates, now.getTime());
+    const countedDates = verdict.trusted ? [...pageDates, ...lastmodDates] : pageDates;
+    const dated = countedDates.length;
+    const datedFromPage = pageDates.length;
 
-      const ageDays = (now.getTime() - best.date.getTime()) / DAY_MS;
+    for (const date of countedDates) {
+      const ageDays = (now.getTime() - date.getTime()) / DAY_MS;
       if (ageDays >= 0 && ageDays < 90) count90++;
       else if (ageDays >= 90 && ageDays < 180) countPrev90++;
 
-      const mi = monthIndex.get(`${best.date.getUTCFullYear()}-${best.date.getUTCMonth()}`);
+      const mi = monthIndex.get(`${date.getUTCFullYear()}-${date.getUTCMonth()}`);
       if (mi !== undefined) monthly[mi]++;
 
       const weekAge = Math.floor(ageDays / 7);
@@ -234,6 +309,9 @@ export async function buildVelocityData(project: ProjectDetail): Promise<Velocit
       weekly,
       avgScore: latestScore.get(def.key) ?? null,
       diffReady,
+      lastmodTrusted: verdict.trusted,
+      lastmodExcluded: verdict.trusted ? 0 : lastmodDates.length,
+      lastmodReason: verdict.reason,
     });
   }
 
