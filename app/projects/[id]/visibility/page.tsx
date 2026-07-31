@@ -65,18 +65,10 @@ export default async function ProjectVisibilityPage({
       return bMiss - aMiss; // biggest visibility gaps first
     });
 
+  // Header + tab bar live in visibility/layout.tsx (2026-07-31) — this page
+  // is the "AI Answers" tab and renders content only.
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
-      <div className="anim-fade-up relative z-30">
-        <h1 className="text-2xl font-bold" style={{ color: "var(--text-1)", letterSpacing: "-0.02em" }}>
-          AI Visibility
-        </h1>
-        <p className="text-sm mt-1" style={{ color: "var(--text-3)" }}>
-          Where your pages stand in Google AI Overviews, People Also Ask, and LLM answers. Per-page
-          keyword detail and prompt management live on each page&apos;s Optimize workbench.
-        </p>
-      </div>
-
+    <div className="space-y-6">
       {hasResults ? (
         <>
           <SearchVisibilityCard
