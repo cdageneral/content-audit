@@ -37,6 +37,16 @@ const fmtDay = (iso: string): string =>
 
 const perMonth = (e: VelocityEntityData): string => (e.count90 / 3).toFixed(1);
 
+/** True when a second scan exists, so new-URL counts are measurable. */
+const hasObserved = (e: VelocityEntityData): boolean =>
+  e.newSinceLastScan !== null && e.daysSincePrevScan !== null;
+
+/** Observed new URLs normalised to a month, shown alongside the raw count. */
+const observedPerMonth = (e: VelocityEntityData): string =>
+  (((e.newSinceLastScan ?? 0) / (e.daysSincePrevScan ?? 1)) * 30).toFixed(1);
+
+const nf = (n: number): string => n.toLocaleString();
+
 const pathOf = (url: string): string => {
   try {
     const u = new URL(url);
@@ -92,15 +102,34 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
     return row;
   });
 
-  // "X is publishing N.N× your rate" — only when both sides have real
-  // trailing-90-day counts.
-  const fastest = competitors
-    .filter((e) => e.count90 > 0)
-    .sort((a, b) => b.count90 - a.count90)[0];
-  const ratio =
-    fastest && client && client.count90 > 0 && fastest.count90 > client.count90
+  // "X is publishing N.N× your rate". Prefer the observed scan-over-scan
+  // counts — every site in a project is scanned in the same sweep, so the
+  // windows are identical and the raw counts are directly comparable. Fall
+  // back to the trailing-90-day page-date counts when no second scan exists.
+  const observedComparable =
+    Boolean(client && hasObserved(client)) && competitors.some((e) => hasObserved(e));
+  const fastest = observedComparable
+    ? competitors
+        .filter((e) => hasObserved(e) && (e.newSinceLastScan ?? 0) > 0)
+        .sort((a, b) => (b.newSinceLastScan ?? 0) - (a.newSinceLastScan ?? 0))[0]
+    : competitors.filter((e) => e.count90 > 0).sort((a, b) => b.count90 - a.count90)[0];
+  const ratio = (() => {
+    if (!fastest || !client) return null;
+    if (observedComparable) {
+      const mine = client.newSinceLastScan ?? 0;
+      const theirs = fastest.newSinceLastScan ?? 0;
+      return mine > 0 && theirs > mine ? (theirs / mine).toFixed(1) : null;
+    }
+    return client.count90 > 0 && fastest.count90 > client.count90
       ? (fastest.count90 / client.count90).toFixed(1)
       : null;
+  })();
+  const ratioDetail =
+    fastest && client
+      ? observedComparable
+        ? `${fastest.newSinceLastScan} new URLs vs your ${client.newSinceLastScan} since the last scan`
+        : `${fastest.count90} dated pages vs your ${client.count90}`
+      : "";
 
   // Scatter: needs a readiness score AND dated URLs.
   const scatterable = entities.filter((e) => e.avgScore !== null && e.dated > 0);
@@ -152,31 +181,67 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
                       </span>
                     )}
                   </div>
-                  <div className="mt-1.5 text-2xl font-extrabold" style={{ color: "var(--text-1)" }}>
-                    {e.dated > 0 ? perMonth(e) : "—"}
-                    <span className="text-xs font-semibold ml-1.5" style={{ color: "var(--text-3)" }}>
-                      pages / mo · last 90 days
-                    </span>
-                  </div>
-                  <div className="text-xs font-semibold mt-0.5">
-                    {deltaPct !== null ? (
-                      <span style={{ color: deltaPct >= 0 ? "#059669" : "#dc2626" }}>
-                        {deltaPct >= 0 ? "▲" : "▼"} {deltaPct >= 0 ? "+" : ""}
-                        {deltaPct}%{" "}
-                        <span className="font-normal" style={{ color: "var(--text-3)" }}>
-                          vs prior 90 days
+                  {/* Three tiers, best-evidence first: measured scan-over-scan
+                      change → page-stated publish dates → library size. The
+                      last one means a baseline scan is never an empty tile. */}
+                  {hasObserved(e) ? (
+                    <>
+                      <div className="mt-1.5 text-2xl font-extrabold" style={{ color: "var(--text-1)" }}>
+                        +{nf(e.newSinceLastScan ?? 0)}
+                        <span className="text-xs font-semibold ml-1.5" style={{ color: "var(--text-3)" }}>
+                          new URLs · {e.daysSincePrevScan} day{e.daysSincePrevScan === 1 ? "" : "s"}
                         </span>
-                      </span>
-                    ) : (
-                      <span className="font-normal" style={{ color: "var(--text-3)" }}>
-                        no prior-period dates to compare
-                      </span>
-                    )}
-                  </div>
+                      </div>
+                      <div className="text-xs font-semibold mt-0.5" style={{ color: "var(--text-2, #475569)" }}>
+                        ≈ {observedPerMonth(e)} / mo{" "}
+                        <span className="font-normal" style={{ color: "var(--text-3)" }}>
+                          measured between scans
+                        </span>
+                      </div>
+                    </>
+                  ) : e.dated > 0 ? (
+                    <>
+                      <div className="mt-1.5 text-2xl font-extrabold" style={{ color: "var(--text-1)" }}>
+                        {perMonth(e)}
+                        <span className="text-xs font-semibold ml-1.5" style={{ color: "var(--text-3)" }}>
+                          pages / mo · last 90 days
+                        </span>
+                      </div>
+                      <div className="text-xs font-semibold mt-0.5">
+                        {deltaPct !== null ? (
+                          <span style={{ color: deltaPct >= 0 ? "#059669" : "#dc2626" }}>
+                            {deltaPct >= 0 ? "▲" : "▼"} {deltaPct >= 0 ? "+" : ""}
+                            {deltaPct}%{" "}
+                            <span className="font-normal" style={{ color: "var(--text-3)" }}>
+                              vs prior 90 days
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="font-normal" style={{ color: "var(--text-3)" }}>
+                            from publish dates on the pages
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="mt-1.5 text-2xl font-extrabold" style={{ color: "var(--text-1)" }}>
+                        {nf(e.total)}
+                        <span className="text-xs font-semibold ml-1.5" style={{ color: "var(--text-3)" }}>
+                          URLs in content library
+                        </span>
+                      </div>
+                      <div className="text-xs font-semibold mt-0.5">
+                        <span className="font-normal" style={{ color: "var(--text-3)" }}>
+                          Baseline recorded — velocity measures from the next scan
+                        </span>
+                      </div>
+                    </>
+                  )}
                   <div className="text-[11px] mt-2" style={{ color: "var(--text-3)" }}>
-                    {e.lastmodTrusted
-                      ? `Dates found for ${e.dated} of ${e.total} known URLs`
-                      : `Counting ${e.dated} page-stated date${e.dated === 1 ? "" : "s"} of ${e.total} known URLs`}
+                    {nf(e.total)} URLs known
+                    {e.dated > 0 && ` · ${nf(e.dated)} with a publish date`}
+                    {e.latestScanAt && ` · last scan ${fmtDay(e.latestScanAt)}`}
                   </div>
                   {!e.lastmodTrusted && (
                     <div
@@ -188,7 +253,10 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
                       {e.lastmodReason === "bulk"
                         ? "they cluster on a few days, which is a site-wide update, not publishing."
                         : "none are older than 6 months, so they track changes rather than publish history."}
-                      {e.dated === 0 && " No page-stated dates found, so this site's rate can't be measured yet."}
+                      {e.dated === 0 &&
+                        (hasObserved(e)
+                          ? " The rate above is measured from URLs appearing between scans instead."
+                          : " No page-stated dates found, so this site's rate can't be measured yet.")}
                     </div>
                   )}
                 </div>
@@ -201,8 +269,7 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
               className="mt-4 rounded-lg border px-4 py-2.5 text-sm font-medium"
               style={{ background: "#fffbeb", borderColor: "#fcd34d", color: "#92400e" }}
             >
-              ⚠ <b>{fastest.name} is publishing {ratio}× your rate</b> over the last 90 days
-              ({fastest.count90} dated pages vs your {client!.count90}).
+              ⚠ <b>{fastest.name} is publishing {ratio}× your rate</b> — {ratioDetail}.
             </div>
           )}
 
