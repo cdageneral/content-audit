@@ -285,6 +285,46 @@ export async function getActiveJobs(projectId: string) {
   `.catch(() => [] as Record<string, unknown>[]);
 }
 
+// ── Last-run failure (surfaced as an alert on the Overview) ──
+//
+//  Without this the app fails silently: the client job is marked `failed`,
+//  getActiveJobs excludes failed rows so no banner shows, and the page
+//  re-renders byte-identical — which is exactly what "the Run button
+//  flashes and nothing happens" looked like. It also restores the blocked-
+//  site alert that was lost when this page was rebuilt for the left rail.
+
+/** Written by start.ts when a newer run supersedes an older one — not a real failure. */
+const SUPERSEDED = "Superseded by new run";
+
+export interface LastRunFailure {
+  jobId: string;
+  message: string;
+  at: string | null;
+}
+
+export async function getLastRunFailure(projectId: string): Promise<LastRunFailure | null> {
+  const sql = hubSql();
+  const rows = await sql`
+    SELECT id, status, error_message, completed_at, created_at
+    FROM audit_jobs
+    WHERE project_id = ${projectId} AND competitor_id IS NULL
+    ORDER BY created_at DESC LIMIT 1
+  `.catch(() => [] as Record<string, unknown>[]);
+
+  const row = rows[0];
+  if (!row || row.status !== "failed") return null;
+
+  const message = (row.error_message as string | null) ?? "";
+  // A superseded job is bookkeeping, not something to alarm the user about.
+  if (!message || message === SUPERSEDED) return null;
+
+  return {
+    jobId: row.id as string,
+    message,
+    at: ((row.completed_at ?? row.created_at) as Date | string | null)?.toString() ?? null,
+  };
+}
+
 // ── Stale-baseline check (pre-determinism score rows) ────────
 export async function isStaleBaseline(clientJobId: string | undefined): Promise<boolean> {
   if (!clientJobId) return false;
