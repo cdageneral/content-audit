@@ -39,8 +39,9 @@ export default async function ProjectCompetitorsPage({
           hasInventory: false,
           newPages: [],
           anyDiffReady: false,
+          scopeNote: null,
         }))
-      : { entities: [], monthLabels: [], hasInventory: false, newPages: [], anyDiffReady: false };
+      : { entities: [], monthLabels: [], hasInventory: false, newPages: [], anyDiffReady: false, scopeNote: null };
 
   // Previous-run averages per site (for the matrix ▲/▼ tickers) — history is
   // ordered ASC; the second-to-last point per site is "last run".
