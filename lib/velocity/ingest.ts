@@ -19,7 +19,7 @@
 
 import { neon } from "@neondatabase/serverless";
 import { parseStringPromise } from "xml2js";
-import { recordInventory, type InventoryEntry } from "./store";
+import { countInventory, recordInventory, recordScan, type InventoryEntry } from "./store";
 
 function db() {
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is not set");
@@ -260,7 +260,16 @@ export async function ingestVelocityForJob(jobId: string): Promise<void> {
     jobId,
     entries,
   });
+
+  // Log this scan's URL-set size. The first scan gives an honest library
+  // size to show immediately; every scan after it yields an observed
+  // "N new URLs over M days" that needs no publish dates at all.
+  const urlCount = await countInventory(projectId, competitorId).catch(() => inserted + updated);
+  await recordScan({ projectId, competitorId, jobId, urlCount, newCount: inserted }).catch((err) =>
+    console.error(`[velocity] recordScan failed for job ${jobId}:`, err)
+  );
+
   console.log(
-    `[velocity] job ${jobId}: inventory recorded (${inserted} new, ${updated} seen again, ${sitemapEntries.length} sitemap URLs)`
+    `[velocity] job ${jobId}: inventory recorded (${inserted} new, ${updated} seen again, ${sitemapEntries.length} sitemap URLs, ${urlCount} total)`
   );
 }

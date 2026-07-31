@@ -14,7 +14,7 @@
 // ─────────────────────────────────────────────────────────────
 
 import { neon } from "@neondatabase/serverless";
-import { getInventoryByProject, type InventoryRow } from "./store";
+import { getInventoryByProject, getScansByProject, type InventoryRow, type ScanPoint } from "./store";
 import type { ProjectDetail } from "@/lib/db/projects";
 
 function db() {
@@ -82,6 +82,24 @@ export interface VelocityEntityData {
   lastmodExcluded: number;
   /** Why they were excluded, for the UI note. */
   lastmodReason: LastmodReason | null;
+
+  // ── Observed scan-over-scan velocity (needs no publish dates at all) ──
+  /** How many scans have recorded this site's URL set. */
+  scanCount: number;
+  /** URLs first seen in the latest scan. Null until a second scan exists. */
+  newSinceLastScan: number | null;
+  /** Days between the previous scan and the latest one. */
+  daysSincePrevScan: number | null;
+  /** ISO timestamps of the latest and previous recorded scans. */
+  latestScanAt: string | null;
+  prevScanAt: string | null;
+}
+
+/** One recorded observation of a site's URL set. */
+interface ScanPointLite {
+  at: Date;
+  urlCount: number;
+  newCount: number;
 }
 
 interface LastmodVerdict {
@@ -180,10 +198,25 @@ async function getDoneJobs(projectId: string): Promise<DoneJob[]> {
 }
 
 export async function buildVelocityData(project: ProjectDetail): Promise<VelocityData> {
-  const [inventory, doneJobs] = await Promise.all([
+  const [inventory, doneJobs, scanLog] = await Promise.all([
     getInventoryByProject(project.id).catch(() => [] as InventoryRow[]),
     getDoneJobs(project.id).catch(() => [] as DoneJob[]),
+    getScansByProject(project.id).catch(() => [] as ScanPoint[]),
   ]);
+
+  // Scan log grouped per site, newest first.
+  const scansByEntity = new Map<string, ScanPointLite[]>();
+  for (const s of scanLog) {
+    const key = s.competitorId ?? "client";
+    const list = scansByEntity.get(key) ?? [];
+    list.push({ at: s.scannedAt, urlCount: s.urlCount, newCount: s.newCount });
+    scansByEntity.set(key, list);
+  }
+
+  // Job completion times, for deriving scan points from inventory when the
+  // scan log predates this feature (see derivedScanPoints below).
+  const jobCompletedAt = new Map<string, Date>();
+  for (const j of doneJobs) if (j.completedAt) jobCompletedAt.set(j.id, j.completedAt);
 
   const now = new Date();
 
@@ -253,6 +286,33 @@ export async function buildVelocityData(project: ProjectDetail): Promise<Velocit
       if (row.publishedAt) pageDates.push(row.publishedAt);
       else if (row.lastmod) lastmodDates.push(row.lastmod);
     }
+    // Scan points: the log is authoritative, but projects that recorded
+    // inventory before the log existed can still be reconstructed from
+    // first_seen_job groups (a scan that added zero URLs leaves no group,
+    // so derived history can under-report — the log is exact going forward).
+    let points = scansByEntity.get(def.key) ?? [];
+    if (points.length === 0) {
+      const byJob = new Map<string, number>();
+      for (const r of rows) {
+        if (!r.firstSeenJob) continue;
+        byJob.set(r.firstSeenJob, (byJob.get(r.firstSeenJob) ?? 0) + 1);
+      }
+      const derived: ScanPointLite[] = [];
+      byJob.forEach((n, jobId) => {
+        const at = jobCompletedAt.get(jobId);
+        if (at) derived.push({ at, urlCount: 0, newCount: n });
+      });
+      derived.sort((a, b) => a.at.getTime() - b.at.getTime());
+      let running = 0;
+      for (const d of derived) {
+        running += d.newCount;
+        d.urlCount = running;
+      }
+      points = derived.reverse(); // newest first, matching the log
+    }
+    const latestPoint = points[0] ?? null;
+    const prevPoint = points[1] ?? null;
+
     const verdict = assessLastmod(pageDates.length, lastmodDates, now.getTime());
     const countedDates = verdict.trusted ? [...pageDates, ...lastmodDates] : pageDates;
     const dated = countedDates.length;
@@ -312,6 +372,14 @@ export async function buildVelocityData(project: ProjectDetail): Promise<Velocit
       lastmodTrusted: verdict.trusted,
       lastmodExcluded: verdict.trusted ? 0 : lastmodDates.length,
       lastmodReason: verdict.reason,
+      scanCount: points.length,
+      newSinceLastScan: latestPoint && prevPoint ? latestPoint.newCount : null,
+      daysSincePrevScan:
+        latestPoint && prevPoint
+          ? Math.max(1, Math.round((latestPoint.at.getTime() - prevPoint.at.getTime()) / DAY_MS))
+          : null,
+      latestScanAt: latestPoint ? latestPoint.at.toISOString() : null,
+      prevScanAt: prevPoint ? prevPoint.at.toISOString() : null,
     });
   }
 

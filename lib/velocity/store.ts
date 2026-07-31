@@ -56,6 +56,31 @@ export function ensureVelocitySchema(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_content_inventory_project
         ON content_inventory (project_id, competitor_id)
       `;
+      // One row per site per ingest — the observed size of each site's URL
+      // set at that moment, plus how many were new. This is what makes
+      // velocity measurable WITHOUT trusting any date the site publishes:
+      // the first scan records a library size, and every scan after it
+      // contributes an observed "N new URLs over M days".
+      await sql`
+        CREATE TABLE IF NOT EXISTS velocity_scans (
+          id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          project_id    UUID NOT NULL,
+          competitor_id UUID,
+          job_id        UUID,
+          scanned_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          url_count     INTEGER NOT NULL DEFAULT 0,
+          new_count     INTEGER NOT NULL DEFAULT 0
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_velocity_scans_project
+        ON velocity_scans (project_id, competitor_id, scanned_at DESC)
+      `;
+      // A job re-running ingest must not add a second scan row.
+      await sql`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_velocity_scans_job
+        ON velocity_scans (job_id)
+      `;
     })().catch((err) => {
       velocitySchemaReady = null; // allow retry on transient failure
       throw err;
@@ -202,11 +227,80 @@ export async function getInventoryByProject(projectId: string): Promise<Inventor
   }));
 }
 
+// ── Scan log (the observed velocity series) ───────────────────
+
+export interface ScanPoint {
+  competitorId: string | null;
+  jobId: string | null;
+  scannedAt: Date;
+  /** Size of this site's known URL set at this scan. */
+  urlCount: number;
+  /** URLs first seen in this scan. */
+  newCount: number;
+}
+
+/**
+ * Record one site's URL-set size at this scan. Idempotent per job: a
+ * re-run updates the existing row instead of inventing a second data point
+ * (the unique index on job_id backs this).
+ */
+export async function recordScan(input: {
+  projectId: string;
+  competitorId: string | null;
+  jobId: string;
+  urlCount: number;
+  newCount: number;
+}): Promise<void> {
+  await ensureVelocitySchema();
+  const sql = db();
+  // Delete-then-insert rather than ON CONFLICT (42P10 rule, see header).
+  await sql`DELETE FROM velocity_scans WHERE job_id = ${input.jobId}`;
+  await sql`
+    INSERT INTO velocity_scans (project_id, competitor_id, job_id, url_count, new_count)
+    VALUES (${input.projectId}, ${input.competitorId}, ${input.jobId}, ${input.urlCount}, ${input.newCount})
+  `;
+}
+
+/** Count of URLs currently known for one site. */
+export async function countInventory(
+  projectId: string,
+  competitorId: string | null
+): Promise<number> {
+  await ensureVelocitySchema();
+  const sql = db();
+  const rows = await sql`
+    SELECT COUNT(*)::int AS n FROM content_inventory
+    WHERE project_id = ${projectId}
+      AND competitor_id IS NOT DISTINCT FROM ${competitorId}
+  `;
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** Every scan point for a project, newest first. */
+export async function getScansByProject(projectId: string): Promise<ScanPoint[]> {
+  await ensureVelocitySchema();
+  const sql = db();
+  const rows = await sql`
+    SELECT competitor_id, job_id, scanned_at, url_count, new_count
+    FROM velocity_scans
+    WHERE project_id = ${projectId}
+    ORDER BY scanned_at DESC
+  `;
+  return rows.map((r) => ({
+    competitorId: r.competitor_id ? String(r.competitor_id) : null,
+    jobId: r.job_id ? String(r.job_id) : null,
+    scannedAt: new Date(String(r.scanned_at)),
+    urlCount: Number(r.url_count ?? 0),
+    newCount: Number(r.new_count ?? 0),
+  }));
+}
+
 /** Remove all inventory rows for a project (project deletion cleanup). */
 export async function deleteInventoryByProject(projectId: string): Promise<void> {
   await ensureVelocitySchema();
   const sql = db();
   await sql`DELETE FROM content_inventory WHERE project_id = ${projectId}`;
+  await sql`DELETE FROM velocity_scans WHERE project_id = ${projectId}`;
 }
 
 /** Remove one competitor's inventory rows (competitor deletion cleanup). */
@@ -214,4 +308,5 @@ export async function deleteInventoryByCompetitor(competitorId: string): Promise
   await ensureVelocitySchema();
   const sql = db();
   await sql`DELETE FROM content_inventory WHERE competitor_id = ${competitorId}`;
+  await sql`DELETE FROM velocity_scans WHERE competitor_id = ${competitorId}`;
 }
