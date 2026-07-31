@@ -377,11 +377,20 @@ function aiAccessBox(ai: AiCrawlerAccess | null | undefined, siteUrl: string): s
   const host = siteUrl.replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");
   const blocked = ai.bots.filter((b) => b.status === "blocked");
   const partial = ai.bots.filter((b) => b.status === "partial");
+  // "unknown" = robots.txt was REFUSED, not absent. A client report must never
+  // turn "we couldn't check" into "everything is fine".
+  const unknown = ai.bots.filter((b) => b.status === "unknown");
   const pills = ai.bots
     .map(
       (b) =>
-        `<span class="aipill ${b.status}">${esc(b.name)} ${
-          b.status === "allowed" ? "✓" : b.status === "blocked" ? "✕ blocked" : "◐ partial"
+        `<span class="aipill ${b.status === "unknown" ? "missing" : b.status}">${esc(b.name)} ${
+          b.status === "allowed"
+            ? "✓"
+            : b.status === "blocked"
+            ? "✕ blocked"
+            : b.status === "partial"
+            ? "◐ partial"
+            : "? unverified"
         }</span>`
     )
     .join("");
@@ -394,8 +403,12 @@ function aiAccessBox(ai: AiCrawlerAccess | null | undefined, siteUrl: string): s
         .join(", ")}).</b> A blocked engine cannot fetch these pages at answer time — no content improvement changes that until access is opened.`
     : partial.length
     ? `<b>${partial.length} AI crawler${partial.length === 1 ? " is" : "s are"} partially restricted in robots.txt.</b> Sections covered by those rules are invisible to the engines behind AI answers.`
+    : unknown.length
+    ? `<b>Crawler access could not be verified — ${esc(host)} refused our request for robots.txt${
+        ai.robotsStatus ? ` (HTTP ${ai.robotsStatus})` : ""
+      }.</b> This is not a clean bill of health: the file may exist and may restrict the engines behind AI answers. The check should be repeated once the site allows automated requests.`
     : `<b>All ${ai.bots.length} major AI crawlers are permitted by robots.txt${ai.robotsFound ? "" : " (no robots.txt found — allowed by default)"}.</b> Crawler access is not the bottleneck — content readiness is.`;
-  const cls = blocked.length ? "bad" : partial.length ? "warn" : "ok";
+  const cls = blocked.length ? "bad" : partial.length || unknown.length ? "warn" : "ok";
   return `<div class="aibox ${cls}"><h3>AI crawler access — checked from robots.txt</h3><p>${headline}</p><div class="aipills">${pills}${llms}</div></div>`;
 }
 
