@@ -3,12 +3,16 @@
 // ─────────────────────────────────────────────────────────────
 //  ProjectRail — the project-scoped left navigation (app shell).
 //  Rendered by app/projects/[id]/layout.tsx for every route under
-//  /projects/[id], including the Optimize workbench. Setup first
-//  (Brand & Context — configure once, feeds the AI), then the
-//  workflow in order: Overview → Pages → AI Visibility →
-//  Competitors → Optimize, then the output surfaces (Reports,
-//  Settings). The dashboard ("/") stays rail-free — it's a
-//  picker, not a workspace.
+//  /projects/[id], including the Optimize workbench. Run Audit is
+//  pinned at the top as an ACTION (not a nav row) so a scan can be
+//  started from any section. Then Setup (Brand & Context — configure
+//  once, feeds the AI), then the workflow in order: Overview →
+//  Pages → Optimize → AI Visibility → Competitors, then the output
+//  surfaces (Reports, Settings). Optimize sits directly under Pages
+//  because that is the actual work loop — find weak pages, fix them;
+//  Visibility and Competitors are the diagnostic surfaces behind it.
+//  The dashboard ("/") stays rail-free — it's a picker, not a
+//  workspace.
 //
 //  On < lg viewports the rail collapses to a horizontal tab bar
 //  under the top nav (same links, same active logic).
@@ -16,6 +20,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
+import RailRunButton from '@/components/RailRunButton';
 
 interface RailProps {
   projectId: string;
@@ -139,6 +144,19 @@ export default function ProjectRail({
       badge: pageCount > 0 ? { text: String(pageCount) } : null,
     },
     {
+      key: 'optimize',
+      label: 'Optimize',
+      href: `${base}/optimize`,
+      match: 'prefix',
+      icon: ic(
+        <>
+          <path d="M12 20h9" />
+          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+        </>
+      ),
+      badge: needsWork > 0 ? { text: String(needsWork), warn: true } : null,
+    },
+    {
       key: 'visibility',
       label: 'AI Visibility',
       href: `${base}/visibility`,
@@ -164,19 +182,6 @@ export default function ProjectRail({
         </>
       ),
       badge: competitorCount > 0 ? { text: String(competitorCount) } : null,
-    },
-    {
-      key: 'optimize',
-      label: 'Optimize',
-      href: `${base}/optimize`,
-      match: 'prefix',
-      icon: ic(
-        <>
-          <path d="M12 20h9" />
-          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-        </>
-      ),
-      badge: needsWork > 0 ? { text: String(needsWork), warn: true } : null,
     },
   ];
 
@@ -281,6 +286,10 @@ export default function ProjectRail({
           </svg>
         </Link>
 
+        {/* Action, pinned above the nav groups — starting a scan should not
+            require navigating back to the Overview first. */}
+        <RailRunButton projectId={projectId} />
+
         <p className="px-3 pt-1 pb-1 text-[10px] font-bold uppercase tracking-[0.08em]" style={{ color: 'var(--text-3)' }}>
           Setup
         </p>
@@ -303,6 +312,7 @@ export default function ProjectRail({
         style={{ background: 'var(--bg-1)', borderColor: 'var(--border)' }}
         aria-label="Project sections"
       >
+        <RailRunButton projectId={projectId} compact />
         {[...setup, ...workflow, ...output].map((item) => {
           const active = isActive(item);
           return (
