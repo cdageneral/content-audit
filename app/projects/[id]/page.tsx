@@ -35,6 +35,7 @@ import {
   buildOptimizedRows,
   buildFixFirst,
   getActiveJobs,
+  getLastRunFailure,
   isStaleBaseline,
 } from "@/lib/hub";
 
@@ -65,7 +66,13 @@ export default async function ProjectOverviewPage({
     origin: string;
     robotsFound: boolean;
     llmsTxtFound: boolean;
-    bots: { name: string; status: "allowed" | "blocked" | "partial"; sampleRule: string | null }[];
+    robotsReachable?: boolean;
+    robotsStatus?: number | null;
+    bots: {
+      name: string;
+      status: "allowed" | "blocked" | "partial" | "unknown";
+      sampleRule: string | null;
+    }[];
   };
   const aiAccessRows = await sql`
     SELECT ai_access FROM audit_jobs
@@ -102,6 +109,12 @@ export default async function ProjectOverviewPage({
 
   const activeJobs = await getActiveJobs(params.id);
   const isRunning = activeJobs.length > 0;
+
+  // If the most recent client run FAILED, say so here. Without this the page
+  // renders identically to a page where nothing was ever clicked — which is
+  // precisely how "Run Audit does nothing" presented. Also restores the
+  // blocked-site alert that was lost when this page moved to the left rail.
+  const lastFailure = isRunning ? null : await getLastRunFailure(params.id).catch(() => null);
 
   // ── Setup checklist (all states derived from real data) ──
   const fixFirst = hasResults ? buildFixFirst(clientScores, serpSummaries) : [];
@@ -228,6 +241,20 @@ export default async function ProjectOverviewPage({
 
       {/* ── Active run banner (live progress) ─────────────── */}
       {isRunning && <LiveAuditBanner initialJobs={activeJobs as any} projectId={params.id} />}
+
+      {/* ── Last run failed ──────────────────────────────── */}
+      {lastFailure && (
+        <div
+          className="anim-fade-up card px-5 py-3.5"
+          style={{ border: "1px solid rgba(245,158,11,0.45)", background: "rgba(245,158,11,0.06)" }}
+          role="alert"
+        >
+          <p className="text-sm" style={{ color: "#b45309" }}>
+            <span className="font-semibold">The last audit run didn&apos;t complete.</span>{" "}
+            {lastFailure.message}
+          </p>
+        </div>
+      )}
 
       {/* ── AI crawler access — BLOCKED only. The all-allowed and partial
           states live in the compact AiCrawlerTile in the header. A hard block
