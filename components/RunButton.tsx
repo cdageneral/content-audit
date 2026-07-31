@@ -68,8 +68,23 @@ export default function RunButton({ projectId, hasCompetitors }: Props) {
         </span>
       )}
 
+      {/* A failed start used to be invisible: the route returned 200 even when
+          discovery found nothing, so this never rendered and the click looked
+          like a no-op. Now it renders, and it renders big enough to be read. */}
       {error && (
-        <span className="text-xs" style={{ color: "#dc2626" }}>{error}</span>
+        <div
+          role="alert"
+          className="text-xs rounded-lg px-3 py-2 text-left"
+          style={{
+            color: "#b91c1c",
+            background: "rgba(239,68,68,0.08)",
+            border: "1px solid rgba(239,68,68,0.35)",
+            maxWidth: 360,
+            lineHeight: 1.45,
+          }}
+        >
+          {error}
+        </div>
       )}
     </div>
   );

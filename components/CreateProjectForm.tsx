@@ -115,6 +115,11 @@ export default function CreateProjectForm() {
 
   function advance() {
     const idx = STEPS.indexOf(step);
+    // 🔑 A competitor typed into the fields but never "+ Add"-ed used to be
+    // discarded silently when the user hit Next — the project was created
+    // with zero competitors while the user believed they had added one.
+    // Leaving this step now commits a valid pending entry.
+    if (step === "competitors") addCompetitor();
     if (idx < STEPS.length - 1) setStep(STEPS[idx + 1]);
   }
 
@@ -123,9 +128,17 @@ export default function CreateProjectForm() {
     if (idx > 0) setStep(STEPS[idx - 1]);
   }
 
+  /** True when the add-competitor fields hold a complete, not-yet-added entry. */
+  function pendingCompetitor(): CompetitorInput | null {
+    if (competitors.length >= 5) return null;
+    if (!newComp.name.trim() || !isValidUrl(newComp.url)) return null;
+    return { ...newComp };
+  }
+
   function addCompetitor() {
-    if (!newComp.name.trim() || !isValidUrl(newComp.url)) return;
-    setCompetitors(prev => [...prev, { ...newComp }]);
+    const pending = pendingCompetitor();
+    if (!pending) return;
+    setCompetitors(prev => [...prev, pending]);
     setNewComp({ name: "", url: "", scopePrefix: "" });
   }
 
@@ -166,7 +179,9 @@ export default function CreateProjectForm() {
           authConfig,
           auditSource,
           sourceUrls: isList ? parsedUrls : undefined,
-          competitors: competitors.map(c => ({
+          // Merge a still-pending entry here too: the step rail lets the user
+          // jump straight to Review, which never routes through advance().
+          competitors: [...competitors, ...(pendingCompetitor() ? [pendingCompetitor()!] : [])].map(c => ({
             name: c.name,
             url: c.url,
             scopePrefix: c.scopePrefix || undefined,
@@ -467,7 +482,13 @@ export default function CreateProjectForm() {
             {auditSource === "domain" && scopePrefix && <ReviewRow label="Scope" value={scopePrefix} mono />}
             {auditSource === "domain" && <ReviewRow label="Max pages" value={String(maxPages)} />}
             <ReviewRow label="Auth" value={authType === "none" ? "None" : authType} />
-            <ReviewRow label="Competitors" value={competitors.length === 0 ? "None added" : competitors.map(c => c.name).join(", ")} />
+            <ReviewRow
+              label="Competitors"
+              value={(() => {
+                const all = [...competitors, ...(pendingCompetitor() ? [pendingCompetitor()!] : [])];
+                return all.length === 0 ? "None added" : all.map(c => c.name).join(", ");
+              })()}
+            />
             <div className="rounded-xl p-4 mt-2" style={{ background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)" }}>
               <p className="text-sm" style={{ color: "var(--text-2)" }}>
                 <span style={{ color: "#4f46e5", fontWeight: 500 }}>First run will start immediately</span> after you create the project —

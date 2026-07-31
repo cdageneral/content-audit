@@ -15,12 +15,17 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
-export type AiBotStatus = "allowed" | "blocked" | "partial";
+// "unknown" = robots.txt could not be READ (403/401/429/5xx/network). It is
+// NOT "allowed" — see lib/crawler/ai-access.ts.
+export type AiBotStatus = "allowed" | "blocked" | "partial" | "unknown";
 
 export interface AiCrawlerTileData {
   checkedAt: string;
   origin: string;
   robotsFound: boolean;
+  /** Optional: rows written before 2026-07-31 lack it — undefined ⇒ reachable. */
+  robotsReachable?: boolean;
+  robotsStatus?: number | null;
   llmsTxtFound: boolean;
   bots: { name: string; status: AiBotStatus; sampleRule: string | null }[];
 }
@@ -37,7 +42,13 @@ const TONE = {
 } as const;
 
 function toneFor(status: AiBotStatus) {
-  return status === "blocked" ? TONE.bad : status === "partial" ? TONE.warn : TONE.ok;
+  return status === "blocked"
+    ? TONE.bad
+    : status === "partial"
+    ? TONE.warn
+    : status === "unknown"
+    ? TONE.mute
+    : TONE.ok;
 }
 
 /** Shield outline with a check / half-fill / cross, colored by overall status. */
@@ -47,6 +58,8 @@ function ShieldIcon({ status, size = 22 }: { status: AiBotStatus; size?: number 
       <path d="M9 9l6 6M15 9l-6 6" />
     ) : status === "partial" ? (
       <path d="M12 8.6v4.2M12 15.6v.1" />
+    ) : status === "unknown" ? (
+      <path d="M10.1 9.9a2 2 0 113 1.7c-.7.4-1.1.9-1.1 1.6M12 16.4v.1" />
     ) : (
       <path d="M9 12.2l2.1 2.1L15.2 10" />
     );
@@ -76,7 +89,13 @@ function StatusPill({ status }: { status: AiBotStatus }) {
       className="px-1.5 py-0.5 rounded text-[10px] font-semibold whitespace-nowrap"
       style={{ background: t.bg, color: t.fg, border: `1px solid ${t.border}` }}
     >
-      {status === "blocked" ? "✕ blocked" : status === "partial" ? "◐ partial" : "✓ allowed"}
+      {status === "blocked"
+        ? "✕ blocked"
+        : status === "partial"
+        ? "◐ partial"
+        : status === "unknown"
+        ? "? unverified"
+        : "✓ allowed"}
     </span>
   );
 }
@@ -90,6 +109,7 @@ export default function AiCrawlerTile({ data }: { data: AiCrawlerTileData }) {
   const total = data.bots.length;
   const blocked = data.bots.filter((b) => b.status === "blocked").length;
   const partial = data.bots.filter((b) => b.status === "partial").length;
+  const unknown = data.bots.filter((b) => b.status === "unknown").length;
   // The tile's fraction answers "how many AI crawlers can reach this site at
   // all" — a partially-restricted crawler still gets in, it just can't see
   // every section, so it counts here. The tile COLOR carries that nuance, and
@@ -98,13 +118,26 @@ export default function AiCrawlerTile({ data }: { data: AiCrawlerTileData }) {
 
   // llms.txt is an emerging nice-to-have, NOT an access blocker — it never
   // drives the tile color, only appears as a row inside the popover.
-  const overall: AiBotStatus = blocked ? "blocked" : partial ? "partial" : "allowed";
+  const overall: AiBotStatus = blocked
+    ? "blocked"
+    : partial
+    ? "partial"
+    : unknown
+    ? "unknown"
+    : "allowed";
   const tone = toneFor(overall);
+
+  // When nothing could be verified, the fraction itself would be a claim we
+  // can't support — show an em dash rather than a reassuring "4/4".
+  const fraction = unknown === total ? "—" : `${reachable}/${total}`;
+  const statusNote = data.robotsStatus ? `HTTP ${data.robotsStatus}` : "no response";
 
   const summary = blocked
     ? `${blocked} of ${total} AI crawlers are blocked in robots.txt — those engines can't fetch your pages at all.`
     : partial
     ? `${partial} of ${total} AI crawlers are partially restricted — some sections are invisible to those engines.`
+    : unknown
+    ? `Crawler access is unverified — this site refused our request for robots.txt (${statusNote}).`
     : `All ${total} major AI crawlers can reach your site.`;
 
   // Clamp the popover into the viewport. Deps are [open] only so it settles in
@@ -169,7 +202,7 @@ export default function AiCrawlerTile({ data }: { data: AiCrawlerTileData }) {
           style={{ color: tone.fg, lineHeight: 1.1 }}
         >
           <ShieldIcon status={overall} size={26} />
-          {reachable}/{total}
+          {fraction}
         </div>
         <div
           className="text-xs mt-0.5 flex items-center justify-center gap-1"
@@ -211,7 +244,11 @@ export default function AiCrawlerTile({ data }: { data: AiCrawlerTileData }) {
             behind ChatGPT, Claude, Perplexity, and Google&apos;s AI training reach your pages? A blocked
             crawler can&apos;t fetch your content at answer time — no content fix changes that until
             access is opened.
-            {!data.robotsFound && " No robots.txt was found, so crawlers are allowed by default."}
+            {data.robotsReachable === false
+              ? ` We could not read ${data.origin}/robots.txt — the site refused the request (${statusNote}). That is not the same as "allowed": the file may well exist and may restrict AI crawlers. Nothing here is verified until the site lets us read it.`
+              : !data.robotsFound
+              ? " No robots.txt was found, so crawlers are allowed by default."
+              : ""}
           </p>
 
           <div className="space-y-1">
