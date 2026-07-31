@@ -107,8 +107,15 @@ async function fetchXml(url: string): Promise<Record<string, any> | null> {
  * Fetch a site's sitemap URL set with lastmod values. Bounded and
  * best-effort — returns [] on any failure. Mirrors the candidate list in
  * lib/crawler/discover.ts but keeps <lastmod> (discovery throws it away).
+ *
+ * scopePrefix: when the audit is scoped to a line of business (a path
+ * prefix), the sitemap set is filtered to it — velocity MIRRORS THE AUDIT
+ * SCOPE, so a /banking/ project never counts the rest of the domain.
  */
-export async function fetchSitemapEntries(siteUrl: string): Promise<SitemapEntry[]> {
+export async function fetchSitemapEntries(
+  siteUrl: string,
+  scopePrefix?: string | null
+): Promise<SitemapEntry[]> {
   let origin: string;
   try {
     origin = new URL(siteUrl).origin;
@@ -146,17 +153,21 @@ export async function fetchSitemapEntries(siteUrl: string): Promise<SitemapEntry
         const childParsed = await fetchXml(childLoc);
         if (childParsed) out.push(...urlsetEntries(childParsed));
       }
-      return filterEntries(out, origin).slice(0, MAX_URLS);
+      return filterEntries(out, origin, scopePrefix).slice(0, MAX_URLS);
     }
 
     const entries = urlsetEntries(parsed);
-    if (entries.length > 0) return filterEntries(entries, origin).slice(0, MAX_URLS);
+    if (entries.length > 0) return filterEntries(entries, origin, scopePrefix).slice(0, MAX_URLS);
   }
 
   return [];
 }
 
-function filterEntries(entries: SitemapEntry[], origin: string): SitemapEntry[] {
+function filterEntries(
+  entries: SitemapEntry[],
+  origin: string,
+  scopePrefix?: string | null
+): SitemapEntry[] {
   const seen = new Set<string>();
   const out: SitemapEntry[] = [];
   for (const e of entries) {
@@ -167,6 +178,8 @@ function filterEntries(entries: SitemapEntry[], origin: string): SitemapEntry[] 
       continue;
     }
     if (!normalized.startsWith(origin)) continue;
+    // Same in-scope semantics as lib/crawler/discover.ts isInScope().
+    if (scopePrefix && !normalized.replace(origin, "").startsWith(scopePrefix)) continue;
     if (isBinaryUrl(normalized)) continue;
     if (seen.has(normalized)) continue;
     seen.add(normalized);
@@ -187,13 +200,30 @@ export async function ingestVelocityForJob(jobId: string): Promise<void> {
   const sql = db();
 
   const jobRows = await sql`
-    SELECT project_id, competitor_id, url FROM audit_jobs WHERE id = ${jobId}
+    SELECT project_id, competitor_id, url, scope_prefix FROM audit_jobs WHERE id = ${jobId}
   `;
   const job = jobRows[0];
   if (!job?.project_id) return;
 
   const projectId = String(job.project_id);
   const competitorId = job.competitor_id ? String(job.competitor_id) : null;
+  const scopePrefix = job.scope_prefix ? String(job.scope_prefix) : null;
+
+  // Velocity MIRRORS THE AUDIT SCOPE (Wayne's rule, 2026-07-30):
+  //  - competitor jobs are always domain/scope crawls → sitemap OK, filtered
+  //    by the competitor's scope prefix;
+  //  - client jobs consult the project's audit source: 'domain' → sitemap
+  //    (filtered by scope prefix); 'single'/'list' → crawl rows ONLY, so the
+  //    listed URLs define the whole counting universe and the rest of the
+  //    domain never inflates the numbers.
+  let includeSitemap = true;
+  if (!competitorId) {
+    const projRows = await sql`
+      SELECT audit_source FROM projects WHERE id = ${projectId}
+    `.catch(() => [] as Record<string, unknown>[]);
+    const source = String(projRows[0]?.audit_source ?? "domain");
+    includeSitemap = source === "domain";
+  }
 
   // Source 1: the crawl — URL + the publish date extracted from the page.
   const pageRows = await sql`
@@ -212,7 +242,9 @@ export async function ingestVelocityForJob(jobId: string): Promise<void> {
   }
 
   // Source 2: the sitemap — URL set beyond the crawl cap, lastmod as a hint.
-  const sitemapEntries = await fetchSitemapEntries(String(job.url)).catch(() => []);
+  const sitemapEntries = includeSitemap
+    ? await fetchSitemapEntries(String(job.url), scopePrefix).catch(() => [])
+    : [];
   for (const e of sitemapEntries) {
     entries.push({
       url: e.url,

@@ -73,6 +73,13 @@ export interface VelocityData {
   newPages: NewPageRow[];
   /** True when at least one competitor has a baseline to diff against. */
   anyDiffReady: boolean;
+  /**
+   * Honest statement of the counting universe when the audit is scoped —
+   * null for plain whole-domain projects. Velocity mirrors the audit scope:
+   * scope prefixes filter the sitemap at ingest; single/list clients count
+   * crawled URLs only.
+   */
+  scopeNote: string | null;
 }
 
 interface DoneJob {
@@ -232,12 +239,28 @@ export async function buildVelocityData(project: ProjectDetail): Promise<Velocit
 
   newPages.sort((a, b) => (b.publishedAt ?? b.firstSeenAt).localeCompare(a.publishedAt ?? a.firstSeenAt));
 
+  // Honest scope statement — velocity mirrors the audit scope.
+  const scopeParts: string[] = [];
+  if (project.auditSource === "list") {
+    scopeParts.push(`${project.clientName}: audited URL list only`);
+  } else if (project.auditSource === "single") {
+    scopeParts.push(`${project.clientName}: the single audited page`);
+  } else if (project.scopePrefix) {
+    scopeParts.push(`${project.clientName}: ${project.scopePrefix}`);
+  }
+  for (const c of project.competitors) {
+    if (c.scopePrefix) scopeParts.push(`${c.name}: ${c.scopePrefix}`);
+  }
+  const scopeNote =
+    scopeParts.length > 0 ? `Counts mirror the audit scope — ${scopeParts.join(" · ")}.` : null;
+
   return {
     entities,
     monthLabels,
     hasInventory: inventory.length > 0,
     newPages: newPages.slice(0, 12),
     anyDiffReady: entities.some((e) => !e.isClient && e.diffReady),
+    scopeNote,
   };
 }
 
