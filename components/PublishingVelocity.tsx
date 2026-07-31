@@ -110,6 +110,7 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
 
   const totalDated = entities.reduce((a, e) => a + e.dated, 0);
   const totalFromPage = entities.reduce((a, e) => a + e.datedFromPage, 0);
+  const excludedSites = entities.filter((e) => !e.lastmodTrusted);
 
   return (
     <>
@@ -173,8 +174,23 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
                     )}
                   </div>
                   <div className="text-[11px] mt-2" style={{ color: "var(--text-3)" }}>
-                    Dates found for {e.dated} of {e.total} known URLs
+                    {e.lastmodTrusted
+                      ? `Dates found for ${e.dated} of ${e.total} known URLs`
+                      : `Counting ${e.dated} page-stated date${e.dated === 1 ? "" : "s"} of ${e.total} known URLs`}
                   </div>
+                  {!e.lastmodTrusted && (
+                    <div
+                      className="text-[11px] mt-1.5 rounded-md px-2 py-1.5"
+                      style={{ background: "#fffbeb", color: "#92400e" }}
+                      title="A sitemap lastmod means the URL changed, not that it was published."
+                    >
+                      ⚠ Sitemap dates excluded ({e.lastmodExcluded.toLocaleString()} URLs) —{" "}
+                      {e.lastmodReason === "bulk"
+                        ? "they cluster on a few days, which is a site-wide update, not publishing."
+                        : "none are older than 6 months, so they track changes rather than publish history."}
+                      {e.dated === 0 && " No page-stated dates found, so this site's rate can't be measured yet."}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -229,9 +245,15 @@ export default function PublishingVelocity({ data }: { data: VelocityData }) {
                 </LineChart>
               </ResponsiveContainer>
               <p className="text-[11px] mt-2 leading-relaxed" style={{ color: "var(--text-3)" }}>
-                Of {totalDated} dated URLs across all sites, {totalFromPage} carry a date on the page
-                itself; the rest use the sitemap&apos;s lastmod value. Once a site has two scans, new
-                URLs are also confirmed by which scan they first appeared in.
+                {totalDated === totalFromPage
+                  ? `All ${totalDated} counted URLs carry a date on the page itself.`
+                  : `Of ${totalDated} counted URLs across all sites, ${totalFromPage} carry a date on the page itself; the rest use the sitemap's lastmod value.`}{" "}
+                Once a site has two scans, new URLs are also confirmed by which scan they first
+                appeared in.
+                {excludedSites.length > 0 &&
+                  ` Sitemap dates were excluded for ${excludedSites.length} site${excludedSites.length === 1 ? "" : "s"} (${excludedSites
+                    .map((e) => e.name)
+                    .join(", ")}) because they read as site-wide updates rather than publishing.`}
                 {data.scopeNote ? ` ${data.scopeNote}` : ""}
               </p>
             </div>
