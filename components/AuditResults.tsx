@@ -569,9 +569,9 @@ export default function AuditResults({ job, scores, summary, competitorPages = [
                 {serpSummaries && (
                   <th
                     className="text-left px-2 py-3"
-                    title="Verified Google SERP status: AI Overview citations and People-Also-Ask answers won, out of this page's ranked keywords that trigger them"
+                    title="Verified Google SERP status: AI Overview citations, People-Also-Ask answers won, and best organic position (G) across this page's ranked keywords"
                   >
-                    AI SERP
+                    SERP
                   </th>
                 )}
                 <th className="px-3 py-3">Grade</th>
@@ -1070,6 +1070,15 @@ function SerpChips({ summary }: { summary?: SerpPageSummary }) {
           topMiss.aioWinners.length ? ` — cited instead: ${topMiss.aioWinners.join(", ")}` : ""
         }${topMiss.siblingCited ? " (another page of this site IS cited)" : ""}`
       : `Cited in ${summary.aioCited} of ${summary.aioTriggered} AI Overviews`;
+  // Traditional-rank pill (2026-07-31): best observed organic position across
+  // this page's non-branded ranked keywords. Lives INSIDE the existing SERP
+  // cell — never a new column (see feedback_wide_table_columns).
+  const hasRank = (summary.bestPosition ?? 0) > 0;
+  const gTone = hasRank
+    ? summary.bestPosition <= 10
+      ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+      : "bg-slate-50 text-slate-500 border-slate-200"
+    : "bg-slate-50 text-slate-400 border-slate-200";
   return (
     <div className="flex flex-col gap-1 whitespace-nowrap">
       <span className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${aioTone}`} title={aioTitle}>
@@ -1080,6 +1089,16 @@ function SerpChips({ summary }: { summary?: SerpPageSummary }) {
         title={`Owns the People-Also-Ask answer for ${summary.paaOwned} of ${summary.paaPresent} keywords showing a PAA box`}
       >
         PAA {summary.paaOwned}/{summary.paaPresent}
+      </span>
+      <span
+        className={`rounded border px-1.5 py-0.5 text-[10px] font-semibold ${gTone}`}
+        title={
+          hasRank
+            ? `Best organic Google position #${summary.bestPosition} across ${summary.rankedKeywords} ranked keyword${summary.rankedKeywords === 1 ? "" : "s"} (non-branded, from the latest SERP snapshot)`
+            : "No organic Google position captured for this page's keywords"
+        }
+      >
+        G {hasRank ? `#${summary.bestPosition} · ${summary.rankedKeywords}kw` : "—"}
       </span>
     </div>
   );

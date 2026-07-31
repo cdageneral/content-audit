@@ -158,7 +158,9 @@ export default function ProjectRail({
     },
     {
       key: 'visibility',
-      label: 'AI Visibility',
+      // "Visibility" (was "AI Visibility", 2026-07-31): the section now tells
+      // one story across two channels — AI Answers + Google Rankings tabs.
+      label: 'Visibility',
       href: `${base}/visibility`,
       match: 'prefix',
       icon: ic(
