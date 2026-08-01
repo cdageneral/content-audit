@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 type AuthType = "none" | "cookie" | "bearer" | "basic";
@@ -82,6 +82,35 @@ export default function CreateProjectForm() {
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Company assignment — super_admin only. A super_admin has no company of
+  // their own, so without this picker every project they created landed
+  // unassigned: visible on the dashboard, invisible to every client user and
+  // uncounted on Admin → Companies.
+  const [isSuper, setIsSuper] = useState(false);
+  const [companyList, setCompanyList] = useState<{ id: string; name: string }[]>([]);
+  const [companyId, setCompanyId] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const me = await fetch("/api/auth/me").then(r => r.json());
+        if (cancelled || !me?.enforced || me?.user?.role !== "super_admin") return;
+        const data = await fetch("/api/admin/companies").then(r => r.json());
+        if (cancelled) return;
+        setCompanyList(
+          (data.companies ?? []).map((c: { id: string; name: string }) => ({ id: c.id, name: c.name }))
+        );
+        setIsSuper(true);
+      } catch {
+        /* picker just stays hidden — creation still works */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const companyLabel = companyList.find(c => c.id === companyId)?.name ?? "Unassigned (admins only)";
 
   // Parsed URL list (for the 'list' source)
   const { valid: parsedUrls, invalidCount } = parseUrlList(urlListText);
@@ -173,6 +202,7 @@ export default function CreateProjectForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           clientName,
+          companyId: companyId || undefined,
           websiteUrl: resolvedWebsiteUrl,
           scopePrefix: auditSource === "domain" ? (scopePrefix || undefined) : undefined,
           maxPages: resolvedMaxPages,
@@ -242,6 +272,27 @@ export default function CreateProjectForm() {
                 onChange={e => setClientName(e.target.value)}
               />
             </div>
+            {isSuper && (
+              <div>
+                <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
+                  Company
+                </label>
+                <select
+                  className="dark-input"
+                  value={companyId}
+                  onChange={e => setCompanyId(e.target.value)}
+                >
+                  <option value="">Unassigned (admins only)</option>
+                  {companyList.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+                <p className="text-xs mt-2" style={{ color: "var(--text-3)" }}>
+                  Client users only see projects belonging to their company. Leave it unassigned
+                  to keep this project admin-only — you can assign it later on Admin → Companies.
+                </p>
+              </div>
+            )}
             {/* Audit source selector */}
             <div>
               <label className="block text-sm font-medium mb-2" style={{ color: "var(--text-2)" }}>
@@ -473,6 +524,7 @@ export default function CreateProjectForm() {
         {step === "review" && (
           <>
             <ReviewRow label="Client" value={clientName} />
+            {isSuper && <ReviewRow label="Company" value={companyLabel} />}
             <ReviewRow label="Audit source" value={SOURCE_LABELS[auditSource]} />
             {auditSource === "list" ? (
               <ReviewRow label="URLs" value={`${parsedUrls.length} page${parsedUrls.length !== 1 ? "s" : ""}`} />
