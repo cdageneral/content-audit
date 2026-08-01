@@ -87,6 +87,7 @@ export default function RankingsView({
   projectId: string;
   rollup: RankRollup;
 }) {
+  void projectId; // still threaded through to the per-keyword detail rows
   const [seg, setSeg] = useState<SegKey | null>(null);
   const [chip, setChip] = useState<ChipKey>('all');
   const [includeBranded, setIncludeBranded] = useState(false);
@@ -94,26 +95,6 @@ export default function RankingsView({
   const [expanded, setExpanded] = useState<string | null>(null);
   const [distMode, setDistMode] = useState<DistMode>('count');
   const [aioAdj, setAioAdj] = useState(false);
-  const [volBusy, setVolBusy] = useState(false);
-  const [volMsg, setVolMsg] = useState<string | null>(null);
-
-  async function fetchVolumes() {
-    setVolBusy(true);
-    setVolMsg(null);
-    try {
-      const res = await fetch(`/api/projects/${projectId}/volumes`, { method: 'POST' });
-      const j = (await res.json()) as { message?: string; error?: string; rowsUpdated?: number };
-      if (!res.ok) {
-        setVolMsg(j.error ?? 'Could not fetch search volumes.');
-      } else {
-        setVolMsg(`${j.message ?? 'Done.'} Reload to see them.`);
-      }
-    } catch {
-      setVolMsg('Could not reach the server — please try again.');
-    } finally {
-      setVolBusy(false);
-    }
-  }
 
   const d = rollup.demand;
   // Volume coverage is shown wherever a demand total is shown. A figure
@@ -288,36 +269,22 @@ export default function RankingsView({
       </div>
 
       {/* ── No verified volume yet ────────────────────────── */}
+      {/* Volume arrives with the scan, like every other metric on this page:
+          the SERP batch fetches per-keyword volumes as it stores each
+          snapshot. This note only explains a gap on scans that ran before
+          that existed — there is nothing for the user to do. */}
       {!rollup.volumesOk && (
         <div className="card p-4">
-          <div className="flex items-start justify-between gap-4 flex-wrap">
-            <div className="max-w-[62ch]">
-              <p className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
-                Search volume isn&apos;t showing for this scan
-              </p>
-              <p className="text-[12.5px] mt-1" style={{ color: 'var(--text-3)' }}>
-                The scan stored Google Ads volumes, which report one shared total for a keyword and
-                every close variant of it — so a single number can be off by orders of magnitude and
-                a total of them is meaningless. Fetching per-keyword volumes replaces them with real
-                figures and unlocks demand-weighted position, demand captured on page 1, and the
-                striking-distance opportunity. It reads the keywords already stored — no re-crawl.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={fetchVolumes}
-              disabled={volBusy}
-              className="rounded-lg px-3.5 py-2 text-[12.5px] font-bold text-white whitespace-nowrap disabled:opacity-60"
-              style={{ background: '#4f46e5' }}
-            >
-              {volBusy ? 'Fetching…' : 'Fetch search volumes'}
-            </button>
-          </div>
-          {volMsg && (
-            <p className="text-[12px] mt-2.5 font-medium" style={{ color: 'var(--text-2)' }}>
-              {volMsg}
-            </p>
-          )}
+          <p className="text-[12.5px]" style={{ color: 'var(--text-3)' }}>
+            <span className="font-semibold" style={{ color: 'var(--text-2)' }}>
+              Search volume fills in on the next scan.
+            </span>{' '}
+            This scan predates per-keyword volumes, and the figures it stored are Google Ads
+            numbers — one shared total for a keyword and every close variant of it — so they are
+            withheld rather than shown as fact. The next scan of this project collects real
+            per-keyword volumes automatically and turns on demand-weighted position, demand
+            captured on page 1, and the striking-distance opportunity.
+          </p>
         </div>
       )}
 
