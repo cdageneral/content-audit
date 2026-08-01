@@ -212,14 +212,37 @@ export async function fetchSearchVolumesDfs(
     }
   );
 
+  // ⚠️ SHAPE: this endpoint nests the keyword rows TWO levels down —
+  // tasks[0].result[0].items[], where result[0] is a location/language
+  // wrapper carrying items_count. Reading result[] as the row list costs a
+  // real charge and silently returns zero volumes (that exact bug shipped
+  // 2026-08-01 and billed $0.36 for nothing). Both shapes are accepted here
+  // so a future response reshuffle degrades instead of going quiet.
   const volumes = new Map<string, number>();
+  const items: Record<string, unknown>[] = [];
   for (const r of results) {
-    const kw = String(r.keyword ?? "").trim().toLowerCase();
-    const sv = r.search_volume;
+    const nested = r.items;
+    if (Array.isArray(nested)) items.push(...(nested as Record<string, unknown>[]));
+    else if (r.keyword !== undefined) items.push(r);
+  }
+
+  for (const it of items) {
+    const kw = String(it.keyword ?? "").trim().toLowerCase();
+    const sv = it.search_volume;
     // A null search_volume means "no data for this keyword". Storing it as 0
     // would assert nobody searches it — a different and unverified claim.
     if (!kw || typeof sv !== "number" || !Number.isFinite(sv)) continue;
     volumes.set(kw, Math.max(0, Math.round(sv)));
+  }
+
+  // A paid call that yields nothing is a bug signal, not a quiet no-op.
+  if (volumes.size === 0) {
+    console.error(
+      `[volumes] DataForSEO returned ${results.length} result block(s) and ` +
+        `${items.length} item(s) for ${clean.length} keyword(s) but produced NO usable ` +
+        `volumes (charged $${costUsd.toFixed(4)}). First result keys: ` +
+        `${JSON.stringify(Object.keys(results[0] ?? {}))}`
+    );
   }
   return { volumes, costUsd };
 }
