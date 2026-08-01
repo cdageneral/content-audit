@@ -1,14 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createProject, listProjects } from "@/lib/db/projects";
-import { authEnforced, seesAllProjects, canReachAdmin } from "@/lib/auth/config";
+import { authEnforced, seesAllProjects, canReachAdmin, isSuperAdmin } from "@/lib/auth/config";
 import { getActiveUser } from "@/lib/auth/session";
-import { getGrantedProjectIds, getCompanyProjectIds, ensureAuthTables } from "@/lib/auth/store";
+import { getGrantedProjectIds, getCompanyProjectIds, ensureAuthTables, getCompanyById } from "@/lib/auth/store";
 
 const CreateSchema = z
   .object({
     clientName: z.string().min(1).max(120),
     websiteUrl: z.string().url(),
+    // Which company owns the project. Only a super_admin may set this — anyone
+    // else is stamped with their own company. Omitted/null = unassigned.
+    companyId: z.string().uuid().nullable().optional(),
     scopePrefix: z.string().optional(),
     maxPages: z.number().int().min(1).max(5000).optional().default(100),
     authConfig: z.record(z.unknown()).optional(),
@@ -91,7 +94,27 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const { competitors, ...projectData } = parsed.data;
+    const { competitors, companyId: requestedCompanyId, ...projectData } = parsed.data;
+
+    // Decide the owning company BEFORE creating anything, so a bad id fails
+    // loudly instead of leaving an orphaned project behind.
+    let stampCompanyId: string | null = null;
+    if (authEnforced()) {
+      const actor = await getActiveUser();
+      if (isSuperAdmin(actor?.role)) {
+        if (requestedCompanyId) {
+          await ensureAuthTables();
+          const company = await getCompanyById(requestedCompanyId);
+          if (!company) {
+            return NextResponse.json({ error: "That company no longer exists." }, { status: 400 });
+          }
+          stampCompanyId = company.id;
+        }
+      } else {
+        // company_admin: always their own company, regardless of what was sent.
+        stampCompanyId = actor?.cid ?? null;
+      }
+    }
 
     // For a URL-list audit, dedupe the URLs and use the first as the
     // project's identity URL if the caller didn't set a meaningful one.
@@ -104,17 +127,14 @@ export async function POST(req: NextRequest) {
 
     const project = await createProject(projectData);
 
-    // Stamp the new project with the creator's company so it's visible to that
-    // company right away (super_admin leaves it unassigned → assign on the
-    // Admin → Companies tab). No-op unless AUTH_ENFORCED.
-    if (authEnforced()) {
-      const actor = await getActiveUser();
-      if (actor?.cid) {
-        const { db } = await import("@/db");
-        const { projects: authProjects } = await import("@/db/schema");
-        const { eq } = await import("drizzle-orm");
-        await db.update(authProjects).set({ companyId: actor.cid }).where(eq(authProjects.id, project.id));
-      }
+    // Stamp the owning company resolved above. A super_admin who picked
+    // "Unassigned" leaves it null — it stays admin-only and now shows in the
+    // Unassigned row on Admin → Companies.
+    if (stampCompanyId) {
+      const { db } = await import("@/db");
+      const { projects: authProjects } = await import("@/db/schema");
+      const { eq } = await import("drizzle-orm");
+      await db.update(authProjects).set({ companyId: stampCompanyId }).where(eq(authProjects.id, project.id));
     }
 
     // Add competitors if provided
