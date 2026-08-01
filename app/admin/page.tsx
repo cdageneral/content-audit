@@ -173,10 +173,19 @@ function CompaniesTab({ companies, projects, reload }: { companies: Company[]; p
   const [openId, setOpenId] = useState<string | null>(null);
   const [showNew, setShowNew] = useState(false);
 
+  // Projects with no company. They still show on the dashboard for admins, but
+  // no client user can ever reach them — and until this row existed the only
+  // way to notice one was to open a company's Manage panel and read the list.
+  const unassigned = projects.filter(p => !p.companyId).length;
+  const ownerName = (id: string | null) => companies.find(c => c.id === id)?.name ?? 'another company';
+
   return (
     <div>
       <div className="flex justify-between items-center mb-4">
-        <p className="text-sm text-slate-500">{companies.length} compan{companies.length === 1 ? 'y' : 'ies'}</p>
+        <p className="text-sm text-slate-500">
+          {companies.length} compan{companies.length === 1 ? 'y' : 'ies'}
+          <span className="text-slate-400"> · {projects.length} project{projects.length === 1 ? '' : 's'}</span>
+        </p>
         <button className={btnPrimary} onClick={() => setShowNew(v => !v)}>{showNew ? 'Cancel' : '+ New company'}</button>
       </div>
 
@@ -185,6 +194,11 @@ function CompaniesTab({ companies, projects, reload }: { companies: Company[]; p
       {companies.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white text-center py-16 text-sm text-slate-500">
           No companies yet. Create one, then add its users on the Users tab.
+          {unassigned > 0 && (
+            <span className="block mt-2 text-[12px] text-amber-600">
+              {unassigned} project{unassigned === 1 ? '' : 's'} {unassigned === 1 ? 'is' : 'are'} unassigned — admin-only until you assign {unassigned === 1 ? 'it' : 'them'} to a company.
+            </span>
+          )}
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
@@ -210,11 +224,22 @@ function CompaniesTab({ companies, projects, reload }: { companies: Company[]; p
                   </tr>
                   {openId === c.id && (
                     <tr><td colSpan={5} className="bg-slate-50 border-b border-slate-200 px-4 py-4">
-                      <ManageCompany company={c} projects={projects} reload={reload} onClose={() => setOpenId(null)} />
+                      <ManageCompany company={c} projects={projects} companyName={ownerName} reload={reload} onClose={() => setOpenId(null)} />
                     </td></tr>
                   )}
                 </Fragment>
               ))}
+              {unassigned > 0 && (
+                <tr className="bg-amber-50/40">
+                  <td className="px-4 py-3 border-b border-slate-100 font-medium text-amber-700">Unassigned</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-slate-400">—</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-slate-400">—</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-amber-700 font-medium">{unassigned}</td>
+                  <td className="px-4 py-3 border-b border-slate-100 text-right text-[12px] text-slate-500">
+                    Admin-only — assign under a company&rsquo;s Manage
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -255,7 +280,7 @@ function NewCompanyForm({ onDone }: { onDone: () => void }) {
   );
 }
 
-function ManageCompany({ company, projects, reload, onClose }: { company: Company; projects: Proj[]; reload: () => void; onClose: () => void }) {
+function ManageCompany({ company, projects, companyName, reload, onClose }: { company: Company; projects: Proj[]; companyName: (id: string | null) => string; reload: () => void; onClose: () => void }) {
   const [name, setName] = useState(company.name);
   const [seats, setSeats] = useState(String(company.seatLimit));
   const [expiry, setExpiry] = useState(toDateInput(company.expiresAt));
@@ -280,8 +305,17 @@ function ManageCompany({ company, projects, reload, onClose }: { company: Compan
     const res = await fetch(`/api/admin/companies/${company.id}`, { method: 'DELETE' });
     if (res.ok) { onClose(); reload(); } else { const d = await res.json().catch(() => ({})); setMsg(d.error || 'Delete failed'); }
   }
-  // A project is selectable if unassigned or already this company's.
-  const selectable = projects.filter(p => !p.companyId || p.companyId === company.id);
+  // Every project is selectable. Ones owned by ANOTHER company are shown with
+  // their current owner tagged — toggling one moves it here on Save, in a
+  // single write. (The old list hid them, which meant a cross-company move had
+  // to be done as unassign → save → assign → save, leaving the project briefly
+  // orphaned and unreachable by its client users in between.)
+  const selectable = [...projects].sort((a, b) => {
+    const rank = (p: Proj) => (p.companyId === company.id ? 0 : !p.companyId ? 1 : 2);
+    return rank(a) - rank(b) || a.name.localeCompare(b.name);
+  });
+  // Selected projects that currently belong to a different company.
+  const incoming = projects.filter(p => assigned.includes(p.id) && p.companyId && p.companyId !== company.id);
 
   return (
     <div className="grid md:grid-cols-2 gap-6">
@@ -301,21 +335,37 @@ function ManageCompany({ company, projects, reload, onClose }: { company: Compan
       </div>
       <div>
         <h4 className="text-[10px] uppercase tracking-wider text-slate-400 mb-3">Projects in this company — {assigned.length}</h4>
-        {selectable.length === 0 ? <p className="text-[12px] text-slate-400">No unassigned projects available.</p> : (
+        {selectable.length === 0 ? <p className="text-[12px] text-slate-400">No projects exist yet.</p> : (
           <div className="space-y-1 max-h-56 overflow-y-auto pr-1">
             {selectable.map(p => {
               const on = assigned.includes(p.id);
+              const elsewhere = !!p.companyId && p.companyId !== company.id;
               return (
                 <button key={p.id} onClick={() => toggle(p.id)} className="w-full flex items-center gap-3 px-2.5 py-2 rounded-lg hover:bg-white text-left">
                   <span className={`w-8 h-5 rounded-full relative flex-shrink-0 transition-colors ${on ? 'bg-green-500' : 'bg-slate-300'}`}>
                     <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${on ? 'translate-x-3.5' : 'translate-x-0.5'}`} /></span>
                   <span className={`text-[12.5px] ${on ? 'text-slate-900' : 'text-slate-500'}`}>{p.name}</span>
+                  {elsewhere && (
+                    <span className="text-[10px] uppercase tracking-wider text-slate-400 border border-slate-200 rounded px-1.5 py-0.5 ml-auto flex-shrink-0">
+                      in {companyName(p.companyId)}
+                    </span>
+                  )}
+                  {!p.companyId && (
+                    <span className="text-[10px] uppercase tracking-wider text-amber-600 border border-amber-200 rounded px-1.5 py-0.5 ml-auto flex-shrink-0">
+                      unassigned
+                    </span>
+                  )}
                 </button>
               );
             })}
           </div>
         )}
-        <p className="text-[11px] text-slate-400 mt-2">Assigning a project moves it to this company. Remember to Save.</p>
+        {incoming.length > 0 && (
+          <p className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-2 mt-2">
+            Saving moves {incoming.map(p => `${p.name} (from ${companyName(p.companyId)})`).join(', ')} into {company.name}. Client users at the old compan{incoming.length === 1 ? 'y' : 'ies'} lose access.
+          </p>
+        )}
+        <p className="text-[11px] text-slate-400 mt-2">Toggling a project on moves it to this company. Remember to Save.</p>
       </div>
     </div>
   );
