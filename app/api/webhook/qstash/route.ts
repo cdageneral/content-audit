@@ -953,6 +953,22 @@ async function handleSerpBatch(
   console.log(
     `[serp] Job ${jobId}: ${done} fetched, ${cached} cached, ${skipped} over-budget (units≈${unitsSpent}).`
   );
+
+  // ── Verified-volume sweep ─────────────────────────────────
+  // The volumes stored above are Google Ads figures, which share ONE cluster
+  // total across close variants — unusable for any sum or weighting. This
+  // replaces them with per-keyword volumes and flags the corrected rows.
+  // Runs after each batch because SERP batches are chunked and independent
+  // (there is no single "all pages done" moment to hang it on); the
+  // keyword_volumes cache plus the volume_verified guard stop repeat sweeps
+  // from re-spending. Fully caught — an unverified volume renders "—",
+  // which is the correct outcome, and must never fail a webhook batch.
+  try {
+    const { sweepJobVolumes } = await import("@/lib/serp/volumes");
+    await sweepJobVolumes(jobId, database);
+  } catch (err) {
+    console.error(`[volumes] Job ${jobId}: sweep hook failed:`, err);
+  }
 }
 
 // ── LLM prompt-check batch handler ────────────────────────────
