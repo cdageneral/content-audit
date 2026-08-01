@@ -118,6 +118,37 @@ export function ensureSerpSchema(): Promise<void> {
       await sql`
         ALTER TABLE serp_snapshots ADD COLUMN IF NOT EXISTS volumes_semrush BOOLEAN NOT NULL DEFAULT FALSE
       `;
+      // ── Verified per-keyword volume (2026-08-01) ───────────
+      // Row-level truth marker. The Semrush override marked a whole snapshot
+      // verified even when the provider returned no figure for some of its
+      // keywords — those rows silently kept their Google-Ads GROUPED volume
+      // while presenting as verified. Tolerable for one displayed number,
+      // fatal for a SUM, so demand totals count only rows flagged here.
+      await sql`
+        ALTER TABLE serp_keywords ADD COLUMN IF NOT EXISTS volume_verified BOOLEAN NOT NULL DEFAULT FALSE
+      `;
+      // Snapshot-level convenience marker: at least one of my keyword rows
+      // carries a verified per-keyword volume.
+      await sql`
+        ALTER TABLE serp_snapshots ADD COLUMN IF NOT EXISTS volumes_verified BOOLEAN NOT NULL DEFAULT FALSE
+      `;
+      // Cross-project keyword volume cache. Search volume is a property of
+      // the keyword and locale, not of the page that ranks for it, so the
+      // same keyword is never paid for twice inside the TTL — the second
+      // scan of a site spends almost nothing on volume calls.
+      await sql`
+        CREATE TABLE IF NOT EXISTS keyword_volumes (
+          keyword     TEXT NOT NULL,
+          database    TEXT NOT NULL,
+          volume      INTEGER NOT NULL,
+          source      TEXT NOT NULL,
+          fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (keyword, database)
+        )
+      `;
+      await sql`
+        CREATE INDEX IF NOT EXISTS idx_keyword_volumes_fetched ON keyword_volumes(fetched_at DESC)
+      `;
     })();
   }
   return serpSchemaReady;
