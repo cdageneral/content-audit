@@ -10,10 +10,34 @@
 
 import { useMemo, useState } from 'react';
 import type { RankRollup, RankedKeywordRow } from '@/lib/rankings/rollup';
+import {
+  AIO_CTR_SOURCE,
+  AIO_CTR_SOURCE_URL,
+  AIO_FACTOR_CITED,
+  AIO_FACTOR_UNCITED,
+  CTR_SOURCE,
+  CTR_SOURCE_URL,
+} from '@/lib/rankings/ctr';
 
 type SegKey = 'top3' | 'p410' | 'p1120' | 'p2150' | 'p51' | 'unranked';
 type ChipKey = 'all' | 'up' | 'dn' | 'new' | 'strike' | 'aio' | 'cited';
-type SortKey = 'position' | 'volume' | 'moves';
+type SortKey = 'position' | 'volume' | 'traffic' | 'moves';
+/** What the distribution bar measures: keyword count, or the demand behind them. */
+type DistMode = 'count' | 'demand';
+
+/** Compact form for tile figures — 412,300 reads as 412.3k at 25px. */
+function compact(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`;
+  if (n >= 1_000) return `${(n / 1000).toFixed(1)}k`;
+  return n.toLocaleString();
+}
+
+/** Share of a total as a whole percent, or null when the total is zero. */
+function pctOf(part: number, total: number): number | null {
+  if (total <= 0) return null;
+  return Math.round((part / total) * 100);
+}
 
 const SEGMENTS: { key: SegKey; label: string; color: string }[] = [
   { key: 'top3', label: 'Top 3', color: '#059669' },
@@ -68,6 +92,34 @@ export default function RankingsView({
   const [includeBranded, setIncludeBranded] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>('position');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [distMode, setDistMode] = useState<DistMode>('count');
+  const [aioAdj, setAioAdj] = useState(false);
+  const [volBusy, setVolBusy] = useState(false);
+  const [volMsg, setVolMsg] = useState<string | null>(null);
+
+  async function fetchVolumes() {
+    setVolBusy(true);
+    setVolMsg(null);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/volumes`, { method: 'POST' });
+      const j = (await res.json()) as { message?: string; error?: string; rowsUpdated?: number };
+      if (!res.ok) {
+        setVolMsg(j.error ?? 'Could not fetch search volumes.');
+      } else {
+        setVolMsg(`${j.message ?? 'Done.'} Reload to see them.`);
+      }
+    } catch {
+      setVolMsg('Could not reach the server — please try again.');
+    } finally {
+      setVolBusy(false);
+    }
+  }
+
+  const d = rollup.demand;
+  // Volume coverage is shown wherever a demand total is shown. A figure
+  // covering 812 of 859 keywords is useful; the same figure presented as if
+  // it covered all 859 is not.
+  const partialVolume = rollup.volumesOk && d.covered < d.tracked;
 
   const avgDelta =
     rollup.avgPosition !== null && rollup.prevAvgPosition !== null
@@ -87,13 +139,16 @@ export default function RankingsView({
     const sorted = [...r];
     if (sortKey === 'volume') {
       sorted.sort((a, b) => (b.volume ?? -1) - (a.volume ?? -1) || a.keyword.localeCompare(b.keyword));
+    } else if (sortKey === 'traffic') {
+      const est = (k: RankedKeywordRow) => (aioAdj ? k.estTrafficAio : k.estTraffic) ?? -1;
+      sorted.sort((a, b) => est(b) - est(a) || a.keyword.localeCompare(b.keyword));
     } else if (sortKey === 'moves') {
       sorted.sort(
         (a, b) => Math.abs(b.delta ?? 0) - Math.abs(a.delta ?? 0) || a.keyword.localeCompare(b.keyword)
       );
     } // 'position' keeps the server's deterministic order
     return sorted;
-  }, [rollup.keywords, seg, chip, includeBranded, sortKey]);
+  }, [rollup.keywords, seg, chip, includeBranded, sortKey, aioAdj]);
 
   const chips: { key: ChipKey; label: string }[] = [
     { key: 'all', label: 'All' },
@@ -107,6 +162,9 @@ export default function RankingsView({
 
   const dist = rollup.distribution;
   const distTotal = SEGMENTS.reduce((s, x) => s + dist[x.key], 0);
+  // The bar shows either how MANY keywords sit in a band or how much monthly
+  // demand does — the second is the one that says where the money is.
+  const measure = (k: SegKey): number => (distMode === 'demand' ? d.byBucket[k] : dist[k]);
 
   return (
     <div className="space-y-5">
@@ -120,7 +178,17 @@ export default function RankingsView({
             {rollup.tracked}
           </p>
           <p className="text-[11.5px] mt-1" style={{ color: 'var(--text-3)' }}>
-            keywords your pages rank for, from the latest scan
+            {rollup.volumesOk ? (
+              <>
+                <span className="font-bold" style={{ color: 'var(--text-2)' }}>
+                  {compact(d.total)} searches/mo
+                </span>{' '}
+                of tracked demand
+                {partialVolume ? ` · volume on ${d.covered} of ${d.tracked}` : ''}
+              </>
+            ) : (
+              'keywords your pages rank for, from the latest scan'
+            )}
             {rollup.brandedCount > 0 ? ` · +${rollup.brandedCount} branded (excluded)` : ''}
           </p>
         </div>
@@ -144,6 +212,18 @@ export default function RankingsView({
             )}
             {avgDelta !== null ? ' vs prior scan' : ''} · across {rollup.ranked} ranked
           </p>
+          {d.weightedAvgPosition !== null && (
+            <p
+              className="text-[11.5px] mt-1 pt-1"
+              style={{ color: 'var(--text-3)', borderTop: '1px dashed var(--border)' }}
+              title="Each keyword's position weighted by its monthly search volume — a #3 on 40,000 searches counts far more than a #3 on 20."
+            >
+              <span className="font-bold" style={{ color: '#4f46e5' }}>
+                #{d.weightedAvgPosition}
+              </span>{' '}
+              weighted by demand
+            </p>
+          )}
         </div>
         <div className="card p-4">
           <p className="text-[11px] font-bold uppercase tracking-wider" style={{ color: 'var(--text-3)' }}>
@@ -164,6 +244,18 @@ export default function RankingsView({
             {top10Delta !== null ? ' vs prior scan · ' : ''}
             {rollup.top3} in the top 3
           </p>
+          {rollup.volumesOk && pctOf(d.top10, d.total) !== null && (
+            <p
+              className="text-[11.5px] mt-1 pt-1"
+              style={{ color: 'var(--text-3)', borderTop: '1px dashed var(--border)' }}
+              title="Share of the tracked monthly search volume that sits on keywords you already rank 1–10 for."
+            >
+              <span className="font-bold" style={{ color: '#059669' }}>
+                {pctOf(d.top10, d.total)}%
+              </span>{' '}
+              of demand captured on page 1
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -181,10 +273,53 @@ export default function RankingsView({
             {rollup.striking}
           </p>
           <p className="text-[11.5px] mt-1" style={{ color: 'var(--text-3)' }}>
-            keywords at 11–20 — one push from page 1 →
+            {rollup.volumesOk && d.striking > 0 ? (
+              <>
+                <span className="font-bold" style={{ color: '#a56bfb' }}>
+                  {compact(d.striking)} searches/mo
+                </span>{' '}
+                at 11–20 — one push from page 1 →
+              </>
+            ) : (
+              'keywords at 11–20 — one push from page 1 →'
+            )}
           </p>
         </button>
       </div>
+
+      {/* ── No verified volume yet ────────────────────────── */}
+      {!rollup.volumesOk && (
+        <div className="card p-4">
+          <div className="flex items-start justify-between gap-4 flex-wrap">
+            <div className="max-w-[62ch]">
+              <p className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
+                Search volume isn&apos;t showing for this scan
+              </p>
+              <p className="text-[12.5px] mt-1" style={{ color: 'var(--text-3)' }}>
+                The scan stored Google Ads volumes, which report one shared total for a keyword and
+                every close variant of it — so a single number can be off by orders of magnitude and
+                a total of them is meaningless. Fetching per-keyword volumes replaces them with real
+                figures and unlocks demand-weighted position, demand captured on page 1, and the
+                striking-distance opportunity. It reads the keywords already stored — no re-crawl.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={fetchVolumes}
+              disabled={volBusy}
+              className="rounded-lg px-3.5 py-2 text-[12.5px] font-bold text-white whitespace-nowrap disabled:opacity-60"
+              style={{ background: '#4f46e5' }}
+            >
+              {volBusy ? 'Fetching…' : 'Fetch search volumes'}
+            </button>
+          </div>
+          {volMsg && (
+            <p className="text-[12px] mt-2.5 font-medium" style={{ color: 'var(--text-2)' }}>
+              {volMsg}
+            </p>
+          )}
+        </div>
+      )}
 
       {/* ── Distribution ──────────────────────────────────── */}
       {distTotal > 0 && (
@@ -193,12 +328,43 @@ export default function RankingsView({
             <p className="text-sm font-semibold" style={{ color: 'var(--text-1)' }}>
               Where you rank
             </p>
-            <p className="text-[11.5px]" style={{ color: 'var(--text-3)' }}>
-              click a segment to filter · non-branded keywords
-            </p>
+            <div className="flex items-center gap-3 flex-wrap">
+              {rollup.volumesOk && (
+                <div
+                  className="inline-flex rounded-lg overflow-hidden border"
+                  style={{ borderColor: 'var(--border)' }}
+                  role="group"
+                  aria-label="Measure the distribution by keyword count or by search demand"
+                >
+                  {(
+                    [
+                      ['count', 'Keywords'],
+                      ['demand', 'Demand'],
+                    ] as [DistMode, string][]
+                  ).map(([m, label]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setDistMode(m)}
+                      className="px-2.5 py-1 text-[11.5px] font-semibold transition-colors"
+                      style={
+                        distMode === m
+                          ? { background: '#4f46e5', color: '#fff' }
+                          : { background: 'var(--bg-1)', color: 'var(--text-2)' }
+                      }
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="text-[11.5px]" style={{ color: 'var(--text-3)' }}>
+                click a segment to filter · non-branded keywords
+              </p>
+            </div>
           </div>
           <div className="flex h-8 rounded-lg overflow-hidden mt-3" role="group" aria-label="Position distribution">
-            {SEGMENTS.filter((s) => dist[s.key] > 0).map((s) => (
+            {SEGMENTS.filter((s) => measure(s.key) > 0).map((s) => (
               <button
                 key={s.key}
                 type="button"
@@ -208,14 +374,18 @@ export default function RankingsView({
                 }}
                 className="flex items-center justify-center text-white text-[11.5px] font-bold min-w-[30px] transition-opacity hover:opacity-90"
                 style={{
-                  flex: dist[s.key],
+                  flex: measure(s.key),
                   background: s.color,
                   outline: seg === s.key ? '2.5px solid var(--text-1)' : 'none',
                   outlineOffset: '-2.5px',
                 }}
-                title={`${s.label} — ${dist[s.key]} keyword${dist[s.key] === 1 ? '' : 's'}`}
+                title={
+                  distMode === 'demand'
+                    ? `${s.label} — ${d.byBucket[s.key].toLocaleString()} searches/mo`
+                    : `${s.label} — ${dist[s.key]} keyword${dist[s.key] === 1 ? '' : 's'}`
+                }
               >
-                {dist[s.key]}
+                {distMode === 'demand' ? compact(d.byBucket[s.key]) : dist[s.key]}
               </button>
             ))}
           </div>
@@ -227,6 +397,16 @@ export default function RankingsView({
               </span>
             ))}
           </div>
+          {distMode === 'demand' && (
+            <p className="text-[11px] mt-2" style={{ color: 'var(--text-3)' }}>
+              Each band is sized by monthly search volume instead of keyword count
+              {partialVolume
+                ? `, across the ${d.covered} of ${d.tracked} keywords with a verified volume`
+                : ''}
+              . Bands can look very different here — a handful of high-demand keywords outweighs a
+              long tail of rarely-searched ones.
+            </p>
+          )}
           {dist.unranked > 0 && (
             <p className="text-[11px] mt-2" style={{ color: 'var(--text-3)' }}>
               “No rank captured” = the keyword appeared in this page&apos;s SERP data without an organic
@@ -296,8 +476,23 @@ export default function RankingsView({
                   <option value="position">Position</option>
                   <option value="moves">Biggest moves</option>
                   {rollup.volumesOk && <option value="volume">Volume</option>}
+                  {rollup.volumesOk && <option value="traffic">Est. traffic</option>}
                 </select>
               </label>
+              {rollup.volumesOk && rollup.demand.estTrafficOnAio > 0 && (
+                <label
+                  className="inline-flex items-center gap-1.5 cursor-pointer select-none"
+                  title={`Multiplies the estimate on keywords whose SERP carries an AI answer — \u00d7${AIO_FACTOR_UNCITED} when you are not cited, \u00d7${AIO_FACTOR_CITED} when you are. Both ratios come from measured CTR (${AIO_CTR_SOURCE}).`}
+                >
+                  <input
+                    type="checkbox"
+                    className="accent-indigo-600"
+                    checked={aioAdj}
+                    onChange={(e) => setAioAdj(e.target.checked)}
+                  />
+                  AI Overview discount
+                </label>
+              )}
             </div>
           </div>
           <div className="flex gap-2 flex-wrap mt-2.5">
@@ -330,6 +525,17 @@ export default function RankingsView({
               </button>
             )}
           </div>
+          {rollup.volumesOk && d.estTrafficTotal > 0 && (
+            <p className="text-[11.5px] mt-2" style={{ color: 'var(--text-2)' }}>
+              <span className="font-bold" style={{ color: '#a56bfb' }}>
+                ~{d.estTrafficTotal.toLocaleString()} modelled clicks/mo
+              </span>{' '}
+              across page-1 keywords
+              {d.estTrafficAdjTotal !== d.estTrafficTotal && (
+                <> · ~{d.estTrafficAdjTotal.toLocaleString()} with the AI Overview discount applied</>
+              )}
+            </p>
+          )}
           <p className="text-[11.5px] mt-2" style={{ color: 'var(--text-3)' }}>
             {rows.length} keyword{rows.length === 1 ? '' : 's'}
             {seg ? ` · ${SEGMENTS.find((s) => s.key === seg)?.label}` : ''} · click a row for detail
@@ -341,6 +547,18 @@ export default function RankingsView({
               <tr style={{ background: 'var(--bg-2)' }}>
                 <th className="text-left font-bold uppercase tracking-wider text-[10.5px] px-4 py-2.5" style={{ color: 'var(--text-3)' }}>Keyword</th>
                 <th className="text-right font-bold uppercase tracking-wider text-[10.5px] px-3 py-2.5" style={{ color: 'var(--text-3)' }}>Vol/mo</th>
+                {rollup.volumesOk && (
+                  <th
+                    className="text-right font-bold uppercase tracking-wider text-[10.5px] px-3 py-2.5 whitespace-nowrap"
+                    style={{ color: 'var(--text-3)' }}
+                    title="Modelled: monthly search volume × the published average click-through rate for this position. Not measured traffic."
+                  >
+                    Est. traffic
+                    <span className="ml-1 font-semibold normal-case tracking-normal" style={{ color: '#a56bfb' }}>
+                      {aioAdj ? 'modelled · AIO-adj' : 'modelled'}
+                    </span>
+                  </th>
+                )}
                 <th className="text-left font-bold uppercase tracking-wider text-[10.5px] px-3 py-2.5" style={{ color: 'var(--text-3)' }}>Position</th>
                 <th className="text-left font-bold uppercase tracking-wider text-[10.5px] px-3 py-2.5" style={{ color: 'var(--text-3)' }}>Best page</th>
                 <th className="text-left font-bold uppercase tracking-wider text-[10.5px] px-3 py-2.5" style={{ color: 'var(--text-3)' }}>AI answer</th>
@@ -357,13 +575,15 @@ export default function RankingsView({
                     tone={tone}
                     isOpen={isOpen}
                     projectId={projectId}
+                    showTraffic={rollup.volumesOk}
+                    aioAdj={aioAdj}
                     onToggle={() => setExpanded(isOpen ? null : k.keyword)}
                   />
                 );
               })}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-6 text-center text-[12.5px]" style={{ color: 'var(--text-3)' }}>
+                  <td colSpan={rollup.volumesOk ? 6 : 5} className="px-4 py-6 text-center text-[12.5px]" style={{ color: 'var(--text-3)' }}>
                     No keywords match this filter.
                   </td>
                 </tr>
@@ -375,8 +595,55 @@ export default function RankingsView({
           <span className="font-semibold" style={{ color: 'var(--text-2)' }}>Source:</span> organic positions
           from the DataForSEO SERP snapshots stored with each scan — the same data behind the AI Answers tab.
           Positions refresh on the project&apos;s scan cadence.
-          {!rollup.volumesOk &&
-            ' Volumes show “—” because this scan predates per-keyword Semrush volumes — a fresh scan fills them in.'}
+          {rollup.volumesOk ? (
+            <>
+              {' '}
+              Search volume is the per-keyword monthly figure from DataForSEO&apos;s Search Volume
+              endpoint
+              {partialVolume
+                ? `, available for ${d.covered} of ${d.tracked} keywords — the rest show “—” and are left out of every total`
+                : ''}
+              . Google Ads volumes are deliberately not used: they report one shared total for a
+              keyword and all its close variants.
+              <br />
+              <span className="font-semibold" style={{ color: '#a56bfb' }}>
+                Est. traffic is modelled, not measured.
+              </span>{' '}
+              It multiplies verified volume by a published average click-through rate for the
+              position (
+              <a
+                href={CTR_SOURCE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline"
+                style={{ color: 'var(--text-2)' }}
+              >
+                {CTR_SOURCE}
+              </a>
+              ; sample size not disclosed by the publisher). Published curves cover page 1 only, so
+              positions 11+ show “—”. Real CTR swings widely with intent and brand.
+              {d.estTrafficOnAio > 0 && pctOf(d.estTrafficOnAio, d.estTrafficTotal) !== null && (
+                <>
+                  {' '}
+                  Treat {pctOf(d.estTrafficOnAio, d.estTrafficTotal)}% of this estimate as likely
+                  high: it sits on SERPs carrying an AI Overview, where measured organic CTR ran
+                  0.61% uncited / 0.70% cited against 1.62% with no AI Overview (
+                  <a
+                    href={AIO_CTR_SOURCE_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline"
+                    style={{ color: 'var(--text-2)' }}
+                  >
+                    {AIO_CTR_SOURCE}
+                  </a>
+                  ).
+                </>
+              )}
+            </>
+          ) : (
+            ' Volume and estimated traffic show “—” because no per-keyword volume has been fetched for this scan yet — the next scan fills them in. Google Ads volumes are never shown: they report one shared total for a keyword and all its close variants.'
+          )}
         </p>
       </div>
     </div>
@@ -389,14 +656,19 @@ function FragmentRow({
   tone,
   isOpen,
   projectId,
+  showTraffic,
+  aioAdj,
   onToggle,
 }: {
   k: RankedKeywordRow;
   tone: { bg: string; fg: string };
   isOpen: boolean;
   projectId: string;
+  showTraffic: boolean;
+  aioAdj: boolean;
   onToggle: () => void;
 }) {
+  const est = aioAdj ? k.estTrafficAio : k.estTraffic;
   return (
     <>
       <tr
@@ -420,6 +692,23 @@ function FragmentRow({
         <td className="px-3 py-2.5 text-right tabular-nums" style={{ color: 'var(--text-2)' }}>
           {k.volume !== null && k.volume > 0 ? k.volume.toLocaleString() : '—'}
         </td>
+        {showTraffic && (
+          <td
+            className="px-3 py-2.5 text-right tabular-nums"
+            style={{ color: est !== null ? '#a56bfb' : 'var(--text-3)' }}
+            title={
+              est !== null
+                ? aioAdj && k.aiPresent
+                  ? 'Modelled from published average CTR, then discounted because this SERP carries an AI answer.'
+                  : 'Modelled from published average CTR for this position — not measured traffic.'
+                : k.volume === null
+                  ? 'No verified search volume for this keyword.'
+                  : 'No published CTR beyond page 1.'
+            }
+          >
+            {est !== null ? `~${est.toLocaleString()}` : '—'}
+          </td>
+        )}
         <td className="px-3 py-2.5 whitespace-nowrap">
           <span className="inline-flex items-center justify-center rounded-md px-2 py-0.5 min-w-[36px] font-extrabold text-[12.5px]" style={{ background: tone.bg, color: tone.fg }}>
             {k.position > 0 ? `#${k.position}` : '—'}
@@ -442,7 +731,7 @@ function FragmentRow({
       </tr>
       {isOpen && (
         <tr style={{ background: 'var(--bg-2)' }}>
-          <td colSpan={5} className="px-5 py-3.5">
+          <td colSpan={showTraffic ? 6 : 5} className="px-5 py-3.5">
             <div className="flex items-start gap-8 flex-wrap text-[12px]" style={{ color: 'var(--text-2)' }}>
               <div>
                 <p className="text-[10.5px] font-bold uppercase tracking-wider mb-1" style={{ color: 'var(--text-3)' }}>vs prior scan</p>
