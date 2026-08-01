@@ -107,6 +107,123 @@ async function dfsPost(path: string, payload: Record<string, unknown>): Promise<
   }
 }
 
+/**
+ * Same POST, but returns the FULL result array instead of result[0].
+ * The clickstream volume endpoint returns one result element per keyword,
+ * so the single-element reader above would silently drop 999 of 1000 rows.
+ */
+async function dfsPostList(path: string, payload: Record<string, unknown>): Promise<{
+  results: Record<string, unknown>[];
+  costUsd: number;
+}> {
+  const login = process.env.DATAFORSEO_LOGIN;
+  const password = process.env.DATAFORSEO_PASSWORD;
+  if (!login || !password) throw new Error("DATAFORSEO credentials not set");
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      signal: ctrl.signal,
+      cache: "no-store",
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${login}:${password}`).toString("base64")}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify([payload]),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`DataForSEO HTTP ${res.status}: ${text.slice(0, 200)}`);
+    }
+    const data = (await res.json()) as DfsEnvelope;
+    const task = data.tasks?.[0];
+    if (!task || (task.status_code ?? 0) >= 40000) {
+      throw new Error(`DataForSEO task error: ${task?.status_code} ${task?.status_message ?? ""}`);
+    }
+    return {
+      results: (task.result as Record<string, unknown>[]) ?? [],
+      costUsd: typeof data.cost === "number" ? data.cost : 0,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// ── Per-keyword search volume (DataForSEO Search Volume) ─────
+//
+//  WHY THIS EXISTS: Google Ads — and therefore DataForSEO Labs
+//  keyword_info.search_volume — reports ONE cluster total shared by a
+//  keyword and all its close variants. Proven on US Bank, where ten
+//  distinct "cd rates" phrasings all displayed 165,000 while their real
+//  volumes ranged from 110 to 135,000. Any sum, weighting, or ranking
+//  built on those numbers is wrong, not merely imprecise.
+//
+//  keywords_data/clickstream_data/dataforseo_search_volume/live exists
+//  specifically to un-group them: it normalises Google Ads volume with
+//  clickstream (or Bing) data into a per-keyword figure.
+//  Docs: https://docs.dataforseo.com/v3/keywords_data-clickstream_data-dataforseo_search_volume-live/
+//  Limits: 1000 keywords/request, 12 requests/minute, $0.15 per task.
+
+/** DataForSEO's hard cap on keywords per volume request. */
+export const DFS_VOLUME_BATCH = 1000;
+
+/**
+ * DataForSEO fails the whole task if a keyword is malformed, so screen them
+ * first: it caps keywords at 80 characters and 10 words and does not accept
+ * most punctuation. A keyword that fails here is left unverified rather than
+ * risking the batch it would have travelled in.
+ */
+export function volumeQueryable(keyword: string): boolean {
+  const k = keyword.trim();
+  if (k.length === 0 || k.length > 80) return false;
+  if (k.split(/\s+/).length > 10) return false;
+  return /^[a-z0-9 '&+./-]+$/i.test(k);
+}
+
+export interface DfsVolumeResult {
+  /** lowercased keyword → monthly search volume (only keywords the API returned). */
+  volumes: Map<string, number>;
+  costUsd: number;
+}
+
+/**
+ * Per-keyword monthly search volume for up to DFS_VOLUME_BATCH keywords in
+ * one call. Keywords the API has no figure for are simply ABSENT from the
+ * map — absent means "unknown", never zero.
+ */
+export async function fetchSearchVolumesDfs(
+  keywords: string[],
+  database: string
+): Promise<DfsVolumeResult> {
+  const loc = locFor(database);
+  const clean = Array.from(
+    new Set(keywords.map((k) => k.trim().toLowerCase()).filter(volumeQueryable))
+  ).slice(0, DFS_VOLUME_BATCH);
+  if (clean.length === 0) return { volumes: new Map(), costUsd: 0 };
+
+  const { results, costUsd } = await dfsPostList(
+    "/keywords_data/clickstream_data/dataforseo_search_volume/live",
+    {
+      keywords: clean,
+      location_code: loc.location_code,
+      language_code: loc.language_code,
+    }
+  );
+
+  const volumes = new Map<string, number>();
+  for (const r of results) {
+    const kw = String(r.keyword ?? "").trim().toLowerCase();
+    const sv = r.search_volume;
+    // A null search_volume means "no data for this keyword". Storing it as 0
+    // would assert nobody searches it — a different and unverified claim.
+    if (!kw || typeof sv !== "number" || !Number.isFinite(sv)) continue;
+    volumes.set(kw, Math.max(0, Math.round(sv)));
+  }
+  return { volumes, costUsd };
+}
+
 // ── Keyword inventory (Labs ranked_keywords, full-URL target) ─
 
 export interface DfsKeywordsResult {
