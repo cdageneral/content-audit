@@ -11,7 +11,7 @@ import Link from "next/link";
 import { checkProjectAccess } from "@/lib/auth/access";
 import { getProjectDetail } from "@/lib/db/projects";
 import SearchVisibilityCard from "@/components/SearchVisibilityCard";
-import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
+import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries, getSerpFreshness } from "@/lib/db/serp";
 import { getPromptRows } from "@/lib/db/prompts";
 import { serpConfigured } from "@/lib/serp/semrush";
 import { dfsConfigured } from "@/lib/serp/dataforseo";
@@ -35,9 +35,13 @@ export default async function ProjectVisibilityPage({
   let serpRollup = null as Awaited<ReturnType<typeof getSerpRollup>>;
   let serpSummaries: Awaited<ReturnType<typeof getSerpPageSummaries>> | undefined;
   const serpJobId = await getLatestSerpJobId(params.id).catch(() => null);
+  // Did the latest run actually re-fetch, or copy the monthly cache? The card
+  // says so out loud — otherwise unchanged numbers imply a measurement.
+  let serpFreshness: Awaited<ReturnType<typeof getSerpFreshness>> = null;
   if (serpJobId) {
     serpRollup = await getSerpRollup(serpJobId).catch(() => null);
     serpSummaries = await getSerpPageSummaries(serpJobId).catch(() => undefined);
+    serpFreshness = await getSerpFreshness(serpJobId).catch(() => null);
   }
 
   const promptRows = await getPromptRows(params.id).catch(() => []);
@@ -77,6 +81,7 @@ export default async function ProjectVisibilityPage({
             promptSummary={promptSummary}
             crawledUrls={clientScores.length}
             configured={serpEnabled}
+            freshness={serpFreshness}
           />
 
           {serpSummaries && Object.keys(serpSummaries).length > 0 && (
