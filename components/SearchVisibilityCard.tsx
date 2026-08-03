@@ -41,12 +41,21 @@ export interface PromptSummaryView {
   brandOnly: number;
 }
 
+/** Whether this run's SERP rows were re-fetched or copied from the cache. */
+export interface SerpFreshnessView {
+  snapshots: number;
+  reused: number;
+  allReused: boolean;
+  dataFetchedAt: string | null;
+}
+
 export default function SearchVisibilityCard({
   projectId,
   rollup,
   promptSummary,
   crawledUrls,
   configured,
+  freshness,
 }: {
   projectId: string;
   rollup: SerpRollupView | null;
@@ -54,25 +63,36 @@ export default function SearchVisibilityCard({
   /** Client pages crawled in the latest run — the All Pages list below. */
   crawledUrls: number;
   configured: boolean;
+  freshness?: SerpFreshnessView | null;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  // Two-step confirm rather than window.confirm(): a native modal blocks the
+  // page, and this action spends real money.
+  const [confirmForce, setConfirmForce] = useState(false);
 
   // Not configured and nothing stored → stay out of the way entirely.
   if (!configured && !rollup) return null;
 
-  async function fetchSerp() {
+  async function fetchSerp(force = false) {
     setBusy(true);
     setMsg(null);
+    setConfirmForce(false);
     try {
-      const res = await fetch(`/api/projects/${projectId}/serp`, { method: "POST" });
+      const res = await fetch(`/api/projects/${projectId}/serp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force }),
+      });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
         setMsg(data?.error ?? "Fetch failed — please try again.");
       } else {
         setMsg(
-          `Checking ${data.pages} page(s) against Google SERP data — results appear here in a minute or two.`
+          force
+            ? `Pulling live Google SERP data for ${data.pages} page(s) — this bills DataForSEO. Results appear here in a minute or two.`
+            : `Checking ${data.pages} page(s) against Google SERP data — results appear here in a minute or two.`
         );
         setTimeout(() => router.refresh(), 20000);
       }
@@ -93,16 +113,70 @@ export default function SearchVisibilityCard({
             People&nbsp;Also&nbsp;Ask answers — and who wins the ones you don&apos;t.
           </p>
         </div>
-        <button
-          onClick={fetchSerp}
-          disabled={busy}
-          className="text-sm px-3 py-1.5 rounded-md border hover:bg-black/5 disabled:opacity-50"
-        >
-          {busy ? "Dispatching…" : rollup ? "Refresh SERP data" : "Fetch search visibility"}
-        </button>
+        <div className="flex flex-col items-end gap-1.5">
+          <button
+            onClick={() => fetchSerp(false)}
+            disabled={busy}
+            className="text-sm px-3 py-1.5 rounded-md border hover:bg-black/5 disabled:opacity-50"
+          >
+            {busy ? "Dispatching…" : rollup ? "Refresh SERP data" : "Fetch search visibility"}
+          </button>
+          {/* Force refresh (2026-08-03). "Refresh SERP data" above honours the
+              monthly cache — inside the same calendar month it re-copies the
+              existing snapshot and nothing on this card can move. This is the
+              escape hatch, and it is deliberately the quieter of the two
+              because it spends DataForSEO units every time. */}
+          {rollup &&
+            (confirmForce ? (
+              <span className="flex items-center gap-2 text-xs">
+                <span style={{ color: "#b45309" }}>
+                  Pull live data for {crawledUrls} page{crawledUrls === 1 ? "" : "s"}? Bills DataForSEO.
+                </span>
+                <button
+                  onClick={() => fetchSerp(true)}
+                  disabled={busy}
+                  className="font-semibold px-2 py-0.5 rounded border disabled:opacity-50"
+                  style={{ color: "#b45309", borderColor: "rgba(180,83,9,0.4)" }}
+                >
+                  Confirm
+                </button>
+                <button
+                  onClick={() => setConfirmForce(false)}
+                  className="opacity-60 hover:opacity-100"
+                >
+                  Cancel
+                </button>
+              </span>
+            ) : (
+              <button
+                onClick={() => setConfirmForce(true)}
+                disabled={busy}
+                className="text-xs opacity-60 hover:opacity-100 hover:underline disabled:opacity-40"
+                title="Skip the monthly cache and re-pull live Google data (costs DataForSEO units)"
+              >
+                Force live refresh
+              </button>
+            ))}
+        </div>
       </div>
 
       {msg && <p className="text-sm mt-3 opacity-80">{msg}</p>}
+
+      {/* Cache state, stated plainly. Without this line an unchanged set of
+          numbers after a re-run reads as a measured result rather than a
+          copy of the last fetch. */}
+      {rollup && freshness?.allReused && (
+        <p className="text-xs mt-3" style={{ color: "#b45309" }}>
+          These figures were <span className="font-semibold">not re-fetched</span> on the latest
+          run — all {freshness.snapshots} page snapshot
+          {freshness.snapshots === 1 ? " was" : "s were"} reused from the
+          {freshness.dataFetchedAt
+            ? ` ${new Date(freshness.dataFetchedAt).toLocaleDateString()} `
+            : " earlier "}
+          pull. SERP data refreshes once per calendar month to control API spend; use{" "}
+          <span className="font-semibold">Force live refresh</span> to override.
+        </p>
+      )}
 
       {rollup && (
         <>
