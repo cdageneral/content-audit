@@ -18,7 +18,8 @@ import RunButton from "@/components/RunButton";
 import LiveAuditBanner from "@/components/LiveAuditBanner";
 import InfoTip from "@/components/InfoTip";
 import AiCrawlerTile from "@/components/AiCrawlerTile";
-import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries } from "@/lib/db/serp";
+import { getSerpRollup, getLatestSerpJobId, getSerpPageSummaries, getSerpFreshness } from "@/lib/db/serp";
+import RunComparisonStrip from "@/components/RunComparisonStrip";
 import { getRankRollup } from "@/lib/rankings/rollup";
 import { getPromptRows } from "@/lib/db/prompts";
 import { serpConfigured } from "@/lib/serp/semrush";
@@ -38,6 +39,7 @@ import {
   getActiveJobs,
   getLastRunFailure,
   isStaleBaseline,
+  getRunComparison,
 } from "@/lib/hub";
 
 export const revalidate = 0;
@@ -88,10 +90,20 @@ export default async function ProjectOverviewPage({
   let serpRollup = null as Awaited<ReturnType<typeof getSerpRollup>>;
   let serpSummaries: Awaited<ReturnType<typeof getSerpPageSummaries>> | undefined;
   const serpJobId = await getLatestSerpJobId(params.id).catch(() => null);
+  let serpFreshness: Awaited<ReturnType<typeof getSerpFreshness>> = null;
   if (serpJobId) {
     serpRollup = await getSerpRollup(serpJobId).catch(() => null);
     serpSummaries = await getSerpPageSummaries(serpJobId).catch(() => undefined);
+    // Whether this run actually re-pulled SERP data or copied the monthly
+    // cache — the "what changed" strip must not present a cache hit as a
+    // measured "no movement".
+    serpFreshness = await getSerpFreshness(serpJobId).catch(() => null);
   }
+
+  // ── Run-to-run comparison (what moved since the previous scan) ──
+  const runComparison = hasResults
+    ? await getRunComparison(params.id, clientJobId, clientScores).catch(() => null)
+    : null;
 
   // Traditional Google rankings (2026-07-31) — observed organic positions
   // from the same stored snapshots; zero extra API calls.
@@ -298,6 +310,20 @@ export default async function ProjectOverviewPage({
         </div>
       )}
 
+      {/* ── What changed since the previous run ──────────────
+          Placed above the hero because it is the first question a
+          re-run raises. Renders only when there IS an earlier run to
+          compare against — never a "0 change" that implies one. */}
+      {hasResults && overall != null && runComparison && (
+        <RunComparisonStrip
+          projectId={params.id}
+          comparison={runComparison}
+          currentOverall={overall}
+          serpReused={serpFreshness?.allReused ?? false}
+          serpFetchedAt={serpFreshness?.dataFetchedAt ?? null}
+        />
+      )}
+
       {/* ── Hero: score ring + setup checklist ───────────── */}
       <div className={`grid gap-4 ${showChecklist && hasResults ? "lg:grid-cols-[1fr_1.3fr]" : "grid-cols-1"}`}>
         {hasResults && overall != null && (
@@ -329,6 +355,21 @@ export default async function ProjectOverviewPage({
             <div className="min-w-0">
               <p className="text-sm font-semibold flex items-center gap-1.5" style={{ color: "var(--text-1)" }}>
                 LLM readiness score
+                {/* Movement vs the previous completed run. Computed against
+                    the score shown in the ring so the two can never disagree. */}
+                {runComparison && overall - runComparison.prevAvg !== 0 && (
+                  <span
+                    className="text-xs font-bold tabular-nums"
+                    style={{ color: overall - runComparison.prevAvg > 0 ? "#059669" : "#dc2626" }}
+                    title={`${overall - runComparison.prevAvg > 0 ? "Up" : "Down"} ${Math.abs(
+                      overall - runComparison.prevAvg
+                    )} vs the previous run (${runComparison.prevAvg} → ${overall})`}
+                  >
+                    {overall - runComparison.prevAvg > 0
+                      ? `▲${overall - runComparison.prevAvg}`
+                      : `▼${Math.abs(overall - runComparison.prevAvg)}`}
+                  </span>
+                )}
                 <InfoTip
                   title="Overall score"
                   text="The average overall LLM-readiness score (0–100) across all pages in the latest completed audit run, weighted across all ten scoring dimensions. The median letter grade shows the typical page — a few very strong or weak pages can't skew it."
