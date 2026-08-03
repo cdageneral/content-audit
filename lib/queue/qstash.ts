@@ -100,6 +100,12 @@ export interface SerpBatchMessage {
   jobId: string;
   pageIds: string[];
   database: string;
+  /**
+   * Bypass the monthly SERP cache and pull live data for every page in the
+   * batch. Off by default — the cache is what keeps DataForSEO spend flat
+   * across repeat runs. Only an explicit user action sets this.
+   */
+  force?: boolean;
 }
 
 export async function enqueueSerpBatch(msg: SerpBatchMessage): Promise<void> {
