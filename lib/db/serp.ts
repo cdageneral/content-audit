@@ -598,3 +598,77 @@ export async function getLatestSerpJobId(projectId: string): Promise<string | nu
   `.catch(() => [] as Record<string, unknown>[]);
   return rows.length > 0 ? (rows[0].job_id as string) : null;
 }
+
+// ── SERP data freshness (2026-08-03) ──────────────────────────
+//
+// A re-run does NOT necessarily re-fetch SERP data. handleSerpBatch
+// calls findMonthlySnapshot first: same URL + database already
+// fetched this calendar month is COPIED into the new job at zero
+// API cost (reused_from points at the source snapshot).
+//
+// That is the right default for spend, but it means the hub's
+// AIO/PAA counts can be byte-identical across two runs simply
+// because nobody fetched anything. Any "what changed" surface has
+// to be able to say so — otherwise an unchanged number reads as a
+// measured result instead of a cache hit.
+//
+// Copies can chain (run 3 reuses run 2's copy of run 1's fetch), so
+// the real fetch date is found by walking reused_from to its root.
+
+export interface SerpFreshness {
+  /** Snapshots stored against this job. */
+  snapshots: number;
+  /** …of which are monthly-cache copies rather than fresh fetches. */
+  reused: number;
+  /** True when NOTHING in this job was fetched live. */
+  allReused: boolean;
+  /** When this data was last actually pulled from the provider. */
+  dataFetchedAt: string | null;
+}
+
+export async function getSerpFreshness(jobId: string): Promise<SerpFreshness | null> {
+  await ensureSerpSchema();
+  const sql = db();
+
+  const counts = await sql`
+    SELECT COUNT(*)::int AS n, COUNT(reused_from)::int AS reused
+    FROM serp_snapshots WHERE job_id = ${jobId}
+  `.catch(() => [] as Record<string, unknown>[]);
+  const snapshots = (counts[0]?.n as number) ?? 0;
+  if (snapshots === 0) return null;
+  const reused = (counts[0]?.reused as number) ?? 0;
+
+  // Walk reused_from back to the snapshots that were really fetched. The
+  // depth guard is belt-and-braces: reused_from always points at an older
+  // row, so the graph can't cycle — but a runaway recursion on a hub page
+  // is not a risk worth leaving open.
+  const roots = await sql`
+    WITH RECURSIVE chain AS (
+      SELECT s.id, s.reused_from, s.fetched_at, 0 AS depth
+      FROM serp_snapshots s WHERE s.job_id = ${jobId}
+      UNION ALL
+      SELECT p.id, p.reused_from, p.fetched_at, c.depth + 1
+      FROM serp_snapshots p
+      JOIN chain c ON p.id = c.reused_from
+      WHERE c.depth < 24
+    )
+    SELECT MAX(fetched_at) AS fetched_at FROM chain WHERE reused_from IS NULL
+  `.catch(() => [] as Record<string, unknown>[]);
+
+  // Fallback: if the recursive walk is unavailable, the job's own newest
+  // fetched_at is still an honest upper bound for a fresh job.
+  let dataFetchedAt = (roots[0]?.fetched_at as string | null) ?? null;
+  if (!dataFetchedAt) {
+    const own = await sql`
+      SELECT MAX(fetched_at) AS fetched_at FROM serp_snapshots WHERE job_id = ${jobId}
+    `.catch(() => [] as Record<string, unknown>[]);
+    dataFetchedAt = (own[0]?.fetched_at as string | null) ?? null;
+  }
+
+  return {
+    snapshots,
+    reused,
+    allReused: reused > 0 && reused === snapshots,
+    dataFetchedAt: dataFetchedAt ? String(dataFetchedAt) : null,
+  };
+}
