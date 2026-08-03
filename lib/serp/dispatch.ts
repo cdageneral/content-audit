@@ -15,7 +15,9 @@ const SERP_PAGE_BATCH = 8;
 export async function dispatchSerpBatches(
   jobId: string,
   projectId: string,
-  pageIds: string[]
+  pageIds: string[],
+  /** Skip the monthly cache and re-pull live SERP data (costs API units). */
+  force = false
 ): Promise<number> {
   // serp_database lives behind the lazy DDL — make sure it exists before read.
   await ensureSerpSchema();
@@ -31,11 +33,12 @@ export async function dispatchSerpBatches(
       jobId,
       pageIds: pageIds.slice(i, i + SERP_PAGE_BATCH),
       database,
+      force,
     });
     batches++;
   }
   console.log(
-    `[serp] Job ${jobId}: ${batches} serp batch(es) dispatched (${pageIds.length} pages, db=${database}).`
+    `[serp] Job ${jobId}: ${batches} serp batch(es) dispatched (${pageIds.length} pages, db=${database}${force ? ", FORCED live refetch" : ""}).`
   );
   return batches;
 }
