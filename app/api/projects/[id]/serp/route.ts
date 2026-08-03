@@ -4,9 +4,16 @@
 //  latest completed audit run — lets existing projects get data
 //  without a full re-crawl, and powers the hub card's button.
 //
-//  Idempotent + cheap: pages snapshotted for this job are skipped
-//  by insertSnapshot's (page, job) guard, and same-month URLs are
-//  served from the monthly cache at zero API-unit cost.
+//  Idempotent + cheap: insertSnapshot replaces this job's prior
+//  snapshot per page, and same-month URLs are served from the
+//  monthly cache at zero API-unit cost.
+//
+//  POST { force: true } bypasses that cache (2026-08-03). Without
+//  it a re-run inside the same calendar month copies the earlier
+//  snapshot verbatim, so the AIO/PAA figures CANNOT move — which
+//  reads as "nothing changed" when the truth is "nothing was
+//  measured". Forcing costs real DataForSEO units, so it is never
+//  the default and never fires from the automatic post-scan path.
 // ─────────────────────────────────────────────────────────────
 
 import { NextRequest, NextResponse } from "next/server";
@@ -21,8 +28,14 @@ export const maxDuration = 60;
 
 type Params = { params: { id: string } };
 
-export async function POST(_req: NextRequest, { params }: Params) {
+export async function POST(req: NextRequest, { params }: Params) {
   try {
+    // Accept the flag from either a JSON body or ?force=1 — the button posts
+    // a body, but a forced refresh is exactly the thing someone reaches for
+    // from a URL when debugging.
+    const body = (await req.json().catch(() => ({}))) as { force?: boolean };
+    const force =
+      body?.force === true || req.nextUrl.searchParams.get("force") === "1";
     const gate = await checkProjectAccess(params.id);
     if (!gate.ok) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -67,7 +80,8 @@ export async function POST(_req: NextRequest, { params }: Params) {
     const batches = await dispatchSerpBatches(
       jobId,
       params.id,
-      pages.map((p) => p.id as string)
+      pages.map((p) => p.id as string),
+      force
     );
 
     return NextResponse.json({
@@ -75,6 +89,7 @@ export async function POST(_req: NextRequest, { params }: Params) {
       jobId,
       pages: pages.length,
       batches,
+      force,
     });
   } catch (err) {
     console.error(`[api/projects/${params.id}/serp POST]`, err);
