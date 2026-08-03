@@ -668,6 +668,10 @@ async function handleSerpBatch(
   msg: SerpBatchMessage & { type: string }
 ): Promise<void> {
   const { jobId, pageIds, database } = msg;
+  // Force refresh (2026-08-03): an explicit user action asking for live data
+  // instead of this calendar month's cached copy. Never set by the automatic
+  // post-scan dispatch — repeat runs stay free.
+  const force = msg.force === true;
 
   if (!serpConfigured() && !dfsConfigured()) {
     console.warn(`[serp] Job ${jobId}: no SERP provider configured — skipping.`);
@@ -711,7 +715,8 @@ async function handleSerpBatch(
 
     try {
       // Monthly cache: same URL+database this calendar month → copy, 0 units.
-      const prior = await findMonthlySnapshot(page.url, database);
+      // A forced refresh skips it outright and pays for live data.
+      const prior = force ? null : await findMonthlySnapshot(page.url, database);
       if (prior) {
         await insertSnapshot({
           projectId,
