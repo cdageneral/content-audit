@@ -411,3 +411,165 @@ export async function getRailStats(projectId: string): Promise<RailStats> {
     exists: true,
   };
 }
+
+// ── Run-to-run comparison (2026-08-03) ────────────────────────
+//
+// "I re-ran the audit and can't tell if anything changed."
+//
+// Everything here is derived from stored scores — ZERO API cost.
+// Two honesty rules are load-bearing:
+//
+//  1. Pages are matched across runs by NORMALISED URL, never by
+//     page_id. A re-audit mints new audit_pages rows, so page ids
+//     never survive a run (same trap as the packet-404 bug).
+//  2. The all-pages average and the like-for-like average are
+//     reported SEPARATELY. If the crawl found two new pages, the
+//     headline average moved partly because the page set changed,
+//     not because any page improved — collapsing those into one
+//     number would be a lie the user can't see through.
+//
+// A zero delta here is a real finding, not a missing one: scoring
+// is deterministic (temperature 0 + content_hash reuse), so an
+// unchanged page reproduces its prior score exactly.
+
+/** One page's score movement between two runs. */
+export interface PageMove {
+  url: string;
+  prev: number;
+  curr: number;
+  /** curr − prev. Positive = improved. */
+  delta: number;
+}
+
+export interface RunComparison {
+  prevJobId: string;
+  /** When the run we're comparing against completed. */
+  prevRunAt: Date | null;
+  /** All-pages average of the PREVIOUS run, rounded like the score ring. */
+  prevAvg: number;
+  /** All-pages average of the CURRENT run, rounded like the score ring. */
+  currAvg: number;
+  /** Pages scored in both runs. */
+  compared: number;
+  improved: number;
+  declined: number;
+  unchanged: number;
+  /** Pages scored this run that weren't in the previous one. */
+  added: number;
+  /** Pages in the previous run that this run didn't score. */
+  dropped: number;
+  /** Average across the intersection only — null when nothing overlaps. */
+  likeForLikeDelta: number | null;
+  /** Biggest absolute movers, improved-first, max 3. */
+  topMovers: PageMove[];
+}
+
+/**
+ * Match a page across runs. Protocol, www, trailing slash and case
+ * differences don't make it a different page.
+ */
+function pageKey(u: string): string {
+  return u
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .replace(/\/+$/, "");
+}
+
+function meanScore(scores: PageScore[]): number {
+  if (scores.length === 0) return 0;
+  return Math.round(scores.reduce((t, s) => t + s.overallScore, 0) / scores.length);
+}
+
+/**
+ * Compare the current client run against the previous completed one.
+ * Returns null when there is no earlier run to compare against — the
+ * caller renders nothing rather than a "0 change" that implies a
+ * comparison happened.
+ */
+export async function getRunComparison(
+  projectId: string,
+  currentJobId: string | undefined,
+  currentScores: PageScore[]
+): Promise<RunComparison | null> {
+  if (!currentJobId || currentScores.length === 0) return null;
+  const sql = hubSql();
+
+  const jobs = await sql`
+    SELECT id, completed_at FROM audit_jobs
+    WHERE project_id = ${projectId}
+      AND competitor_id IS NULL
+      AND status = 'done'
+    ORDER BY completed_at DESC NULLS LAST
+    LIMIT 5
+  `.catch(() => [] as Record<string, unknown>[]);
+
+  // The run immediately older than the one on screen. The current job's own
+  // position is located rather than assumed — and if it isn't in this window
+  // at all we return null instead of falling back to jobs[1], because
+  // comparing against the WRONG run is worse than showing no comparison.
+  const idx = jobs.findIndex((j) => String(j.id) === currentJobId);
+  if (idx < 0) return null;
+  const prevRow = jobs[idx + 1];
+  if (!prevRow) return null;
+
+  const prevJobId = String(prevRow.id);
+  const prevScores = await getScoresByJob(prevJobId).catch(() => [] as PageScore[]);
+  if (prevScores.length === 0) return null;
+
+  const prevByUrl = new Map(prevScores.map((s) => [pageKey(s.url), s]));
+  const currKeys = new Set(currentScores.map((s) => pageKey(s.url)));
+
+  let improved = 0;
+  let declined = 0;
+  let unchanged = 0;
+  let added = 0;
+  let prevSum = 0;
+  let currSum = 0;
+  const movers: PageMove[] = [];
+
+  for (const s of currentScores) {
+    const prior = prevByUrl.get(pageKey(s.url));
+    if (!prior) {
+      added++;
+      continue;
+    }
+    const delta = s.overallScore - prior.overallScore;
+    prevSum += prior.overallScore;
+    currSum += s.overallScore;
+    if (delta > 0) improved++;
+    else if (delta < 0) declined++;
+    else unchanged++;
+    if (delta !== 0) {
+      movers.push({ url: s.url, prev: prior.overallScore, curr: s.overallScore, delta });
+    }
+  }
+
+  const compared = improved + declined + unchanged;
+  const dropped = prevScores.filter((s) => !currKeys.has(pageKey(s.url))).length;
+
+  // Sort by size of move, improvements ahead of declines at equal size, then
+  // URL — so the same data always renders in the same order.
+  movers.sort(
+    (a, b) =>
+      Math.abs(b.delta) - Math.abs(a.delta) ||
+      b.delta - a.delta ||
+      a.url.localeCompare(b.url)
+  );
+
+  return {
+    prevJobId,
+    prevRunAt: prevRow.completed_at ? new Date(prevRow.completed_at as string) : null,
+    prevAvg: meanScore(prevScores),
+    currAvg: meanScore(currentScores),
+    compared,
+    improved,
+    declined,
+    unchanged,
+    added,
+    dropped,
+    likeForLikeDelta:
+      compared > 0 ? Math.round((currSum - prevSum) / compared) : null,
+    topMovers: movers.slice(0, 3),
+  };
+}
