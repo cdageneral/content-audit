@@ -185,6 +185,23 @@ export default function ProjectRail({
       ),
       badge: competitorCount > 0 ? { text: String(competitorCount) } : null,
     },
+    {
+      // Last stop in the workflow on purpose: Business Impact synthesizes
+      // everything upstream (rankings, demand, prompt citations) into the
+      // executive story — the page you open in front of a CMO.
+      key: 'impact',
+      label: 'Business Impact',
+      href: `${base}/impact`,
+      match: 'prefix',
+      icon: ic(
+        // Trending-up — visibility translated into business results.
+        <>
+          <path d="M3 17l6-6 4 4 8-8" />
+          <path d="M14 7h7v7" />
+        </>
+      ),
+      badge: null,
+    },
   ];
 
   const output: RailItem[] = [
