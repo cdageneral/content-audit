@@ -10,11 +10,14 @@ interface Props {
   history: ScoreHistoryPoint[];
   competitors: CompetitorConfig[];
   competitorColors: string[];
+  /** Real client name for the legend + tooltip. Falls back to "Client" when absent. */
+  clientName?: string | null;
 }
 
 const CLIENT_COLOR = "#6366f1";
 
-export default function TrendChart({ history, competitors, competitorColors }: Props) {
+export default function TrendChart({ history, competitors, competitorColors, clientName }: Props) {
+  const clientLabel = (clientName ?? "").trim() || "Client";
   // Pivot history into chart data points keyed by date
   const dateMap = new Map<string, Record<string, number>>();
 
@@ -86,7 +89,7 @@ export default function TrendChart({ history, competitors, competitorColors }: P
         <Line
           type="monotone"
           dataKey="client"
-          name="Client"
+          name={clientLabel}
           stroke={CLIENT_COLOR}
           strokeWidth={2.5}
           dot={{ fill: CLIENT_COLOR, r: 4, strokeWidth: 0 }}
