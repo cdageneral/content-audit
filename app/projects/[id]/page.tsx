@@ -535,6 +535,7 @@ export default async function ProjectOverviewPage({
             history={project.history}
             competitors={project.competitors}
             competitorColors={COMPETITOR_COLORS}
+            clientName={project.clientName}
           />
         </div>
       )}
