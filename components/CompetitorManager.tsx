@@ -8,6 +8,14 @@
  *
  * Add:    POST   /api/projects/[id]/competitors  { name, url, scopePrefix? }
  * Remove: DELETE /api/projects/[id]/competitors  { competitorId }
+ * Run:    POST   /api/projects/[id]/run          (same call the rail Run
+ *                                                 Audit button makes)
+ *
+ * The modal has a sticky footer with an explicit Close and a Run Audit that
+ * starts the scan and closes in one action. Before that footer existed the
+ * only visible way out was the × (backdrop-click and Escape worked but were
+ * undiscoverable), and the "re-run the scan" notice pointed at a button on
+ * a page hidden behind the modal — a dead end.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -41,6 +49,8 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState('');
   const [removingId, setRemovingId] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+  const [runError, setRunError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -70,9 +80,47 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
   }, [open]);
 
   function close() {
+    if (running) return; // don't yank the modal out from under an in-flight start
     setOpen(false);
     setError('');
+    setRunError('');
     if (dirty) router.refresh(); // sync the page (matrix, run button) behind the modal
+  }
+
+  /**
+   * Start a scan straight from the modal, then close.
+   *
+   * Navigates to the project Overview on success for the same reason
+   * RailRunButton does: Overview is the only surface that renders
+   * LiveAuditBanner and the last-run-failure alert, so starting a run and
+   * leaving the user on Competitors/Settings looks like nothing happened.
+   *
+   * startProjectRun supersedes any active jobs for the project, so this is
+   * safe to press while an older run is still in flight — same semantics as
+   * every other Run Audit button.
+   */
+  async function runAudit() {
+    if (running) return;
+    setRunning(true);
+    setRunError('');
+    try {
+      const res = await fetch(`/api/projects/${projectId}/run`, { method: 'POST' });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        // The route returns an actionable message (403 vs no sitemap) — show
+        // it verbatim and keep the modal open so it can actually be read.
+        setRunError(data.error ?? 'Failed to start audit');
+        return;
+      }
+      setOpen(false);
+      setDirty(false);
+      router.push(`/projects/${projectId}`);
+      router.refresh();
+    } catch {
+      setRunError('Network error — please try again');
+    } finally {
+      setRunning(false);
+    }
   }
 
   function isValidUrl(u: string) { try { new URL(u); return true; } catch { return false; } }
@@ -171,7 +219,7 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
                 <div className="rounded-lg px-3 py-2.5 text-xs anim-fade-in flex items-start gap-2"
                   style={{ background: 'rgba(245,158,11,0.10)', border: '1px solid rgba(245,158,11,0.3)', color: '#b45309' }}>
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0 mt-px"><polyline points="23 4 23 10 17 10" /><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" /></svg>
-                  <span><strong>Saved.</strong> Re-run the scan (<strong>Run Audit</strong> on the project) to score the updated competitor set.</span>
+                  <span><strong>Saved.</strong> Scores won&rsquo;t reflect this change until the next scan — hit <strong>Run Audit</strong> below to score the updated competitor set now.</span>
                 </div>
               )}
 
@@ -234,6 +282,64 @@ export default function CompetitorManager({ projectId }: { projectId: string }) 
                 </button>
                 <p className="text-xs" style={{ color: 'var(--text-3)' }}>Competitor audits are capped at 50 pages per run.</p>
               </form>
+            </div>
+
+            {/* Footer — an explicit way out, and a way to act on the notice
+                above without hunting for a button behind the modal. */}
+            <div className="px-6 py-4" style={{ borderTop: '1px solid var(--border)' }}>
+              {runError && (
+                <div
+                  role="alert"
+                  className="mb-3 rounded-lg px-3 py-2 text-xs"
+                  style={{ background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.35)', color: '#b91c1c', lineHeight: 1.45 }}
+                >
+                  {runError}
+                </div>
+              )}
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs" style={{ color: 'var(--text-3)' }}>
+                  {dirty ? 'Runs the client site and all competitors.' : ''}
+                </span>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    type="button"
+                    onClick={close}
+                    disabled={running}
+                    className="text-sm px-4 py-2 rounded-lg"
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--border)',
+                      color: 'var(--text-2)',
+                      cursor: running ? 'not-allowed' : 'pointer',
+                      opacity: running ? 0.5 : 1,
+                    }}
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={runAudit}
+                    disabled={running}
+                    title="Start a new audit of this project and close this window"
+                    className="btn-primary text-sm flex items-center gap-2"
+                    style={{ padding: '8px 16px' }}
+                  >
+                    {running ? (
+                      <>
+                        <span className="spinner" style={{ width: 13, height: 13 }} />
+                        Starting&hellip;
+                      </>
+                    ) : (
+                      <>
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} aria-hidden="true">
+                          <polygon points="5 3 19 12 5 21 5 3" />
+                        </svg>
+                        Run Audit
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         </div>,
