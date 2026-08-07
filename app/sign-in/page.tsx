@@ -3,8 +3,11 @@
 /**
  * /sign-in — email + password login, with first-run super_admin bootstrap.
  *
- * Self-contained styling (standard Tailwind utilities only — no custom design
- * tokens) so it drops into any app. Rename BRAND below to your product name.
+ * Split layout: brand panel left (hidden under lg), form right. Styled with the
+ * app's own design tokens from globals.css (--bg-*, --text-*, --indigo) and the
+ * shared .dark-input / .btn-primary classes, so it matches the dashboard the
+ * user lands on. The wordmark lives in the app nav above this page, so the only
+ * brand art here is the hero logo on the left panel — no duplicate lockup.
  *
  * On mount it calls /api/auth/me: already signed in → go to ?next (default '/');
  * no users yet → show the "create the first admin" form; otherwise login.
@@ -15,6 +18,14 @@ import { useRouter, useSearchParams } from 'next/navigation';
 
 const BRAND = 'Prism Optimizer';
 
+const BULLETS = [
+  'Scored on 10 dimensions of how an LLM retrieves, cites, and reuses your page',
+  'Simulate the new score before you publish',
+  'Every page gets a rewrite packet, not just a grade',
+  'Side-by-side against the competitors actually winning the answer',
+  'Monitor competitors’ content publishing velocity',
+];
+
 type Mode = 'loading' | 'login' | 'bootstrap';
 
 export default function SignInPage() {
@@ -22,6 +33,17 @@ export default function SignInPage() {
     <Suspense fallback={null}>
       <SignInForm />
     </Suspense>
+  );
+}
+
+function Tick() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"
+      className="w-[15px] h-[15px] flex-shrink-0 mt-[2px]">
+      <circle cx="12" cy="12" r="10" fill="rgba(99,102,241,0.12)" />
+      <path d="M8 12.4l2.6 2.6L16 9.6" stroke="var(--indigo)" strokeWidth={2.4}
+        strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
   );
 }
 
@@ -73,75 +95,121 @@ function SignInForm() {
   }
 
   const isBootstrap = mode === 'bootstrap';
-  const input = 'w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 transition';
-  const label = 'block text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-1.5';
+  const label = 'block text-[11px] font-medium uppercase tracking-wider mb-1.5';
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center px-6 py-12">
-      <div className="w-full max-w-sm">
-        <div className="flex items-center gap-2 mb-8">
-          <svg viewBox="0 0 100 100" fill="none" className="w-6 h-6" aria-hidden="true">
-            <path d="M4 66 L44 50" stroke="#c9a4fd" strokeWidth={7} strokeLinecap="round" />
-            <path d="M56 46 L98 30" stroke="#ce9efc" strokeWidth={6} strokeLinecap="round" />
-            <path d="M56 49 L98 44" stroke="#a56bfb" strokeWidth={6} strokeLinecap="round" />
-            <path d="M56 52 L98 60" stroke="#6f1cfe" strokeWidth={6} strokeLinecap="round" />
-            <path d="M50 14 L83 82 L17 82 Z" stroke="#0b0b24" strokeWidth={8} strokeLinejoin="round" strokeLinecap="round" />
-          </svg>
-          <span className="text-lg font-bold text-slate-900">{BRAND}</span>
-        </div>
+    // 65px = app-nav height, so the split fills the viewport without adding a scrollbar.
+    <div className="flex min-h-[calc(100vh-65px)]" style={{ background: 'var(--bg-0)' }}>
 
-        {mode === 'loading' ? (
-          <div className="space-y-3">
-            <div className="h-6 w-32 bg-slate-200 rounded animate-pulse" />
-            <div className="h-11 bg-slate-200 rounded-lg animate-pulse" />
-            <div className="h-11 bg-slate-200 rounded-lg animate-pulse" />
-          </div>
-        ) : (
-          <form onSubmit={submit} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-            <h1 className="text-xl font-bold text-slate-900">{isBootstrap ? 'Create your admin account' : 'Sign in'}</h1>
-            <p className="text-slate-500 text-[13px] mt-1 mb-6">
-              {isBootstrap
-                ? 'First run — set up the super-admin account that manages companies and users.'
-                : 'Welcome back. Enter your credentials.'}
-            </p>
+      {/* ── Brand panel (desktop only; the app nav carries the wordmark on mobile) ── */}
+      <div
+        className="hidden lg:flex lg:w-[54%] flex-col justify-center px-14 py-16 relative overflow-hidden"
+        style={{
+          borderRight: '1px solid var(--border)',
+          background:
+            'radial-gradient(760px 460px at 12% 8%, rgba(139,92,246,0.13), transparent 62%),' +
+            'radial-gradient(620px 520px at 92% 96%, rgba(99,102,241,0.11), transparent 58%),' +
+            'var(--bg-0)',
+        }}
+      >
+        <h2 className="text-[39px] font-extrabold leading-[1.08] tracking-[-0.03em] max-w-[470px]"
+          style={{ color: 'var(--text-1)' }}>
+          Get cited{' '}
+          <span style={{
+            background: 'linear-gradient(96deg, #6f1cfe, #a56bfb 55%, #c9a4fd)',
+            WebkitBackgroundClip: 'text',
+            backgroundClip: 'text',
+            color: 'transparent',
+          }}>by AI.</span>
+        </h2>
 
-            {isBootstrap && (
-              <label className="block mb-4">
-                <span className={label}>Full name</span>
-                <input value={name} onChange={e => setName(e.target.value)} required autoComplete="name"
-                  placeholder="Wayne Cichanski" className={input} />
-              </label>
-            )}
+        <p className="mt-4 max-w-[440px] text-[15px] leading-relaxed" style={{ color: 'var(--text-2)' }}>
+          {BRAND} audits your site the way an LLM reads it, scores every page on how findable
+          and quotable it is, and shows you where you&rsquo;re losing to competitors in AI answers.
+        </p>
 
-            <label className="block mb-4">
-              <span className={label}>Email</span>
-              <input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email"
-                placeholder="you@company.com" className={input} />
-            </label>
+        <ul className="mt-6 flex flex-col gap-2.5 max-w-[445px]">
+          {BULLETS.map((t) => (
+            <li key={t} className="flex items-start gap-3">
+              <Tick />
+              <span className="text-[13.5px] leading-[1.5]" style={{ color: 'var(--text-2)' }}>{t}</span>
+            </li>
+          ))}
+        </ul>
 
-            <label className="block">
-              <span className={label}>Password</span>
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
-                autoComplete={isBootstrap ? 'new-password' : 'current-password'}
-                placeholder={isBootstrap ? 'At least 8 characters' : '••••••••••'} className={input} />
-            </label>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/prism-optimizer-logo-hero.png"
+          alt={BRAND}
+          className="block w-full max-w-[440px] h-auto mt-8"
+        />
+      </div>
 
-            {error && (
-              <div className="mt-4 text-[13px] text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>
-            )}
-
-            <button type="submit" disabled={busy}
-              className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold text-sm rounded-lg py-3 transition-colors">
-              {busy ? 'Please wait…' : isBootstrap ? 'Create account →' : 'Sign in →'}
-            </button>
-
-            {!isBootstrap && (
-              <p className="text-[11px] text-slate-400 mt-5">
-                Accounts are created by an administrator — there is no open sign-up.
+      {/* ── Form panel ── */}
+      <div className="flex-1 flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          {mode === 'loading' ? (
+            <div className="space-y-3">
+              <div className="h-6 w-32 rounded animate-pulse" style={{ background: 'var(--bg-3)' }} />
+              <div className="h-11 rounded-lg animate-pulse" style={{ background: 'var(--bg-3)' }} />
+              <div className="h-11 rounded-lg animate-pulse" style={{ background: 'var(--bg-3)' }} />
+            </div>
+          ) : (
+            <form onSubmit={submit} className="rounded-2xl p-6"
+              style={{
+                background: 'var(--bg-1)',
+                border: '1px solid var(--border)',
+                boxShadow: '0 1px 2px rgba(15,23,42,0.05)',
+              }}>
+              <h1 className="text-xl font-bold" style={{ color: 'var(--text-1)' }}>
+                {isBootstrap ? 'Create your admin account' : 'Sign in'}
+              </h1>
+              <p className="text-[13px] mt-1 mb-6" style={{ color: 'var(--text-3)' }}>
+                {isBootstrap
+                  ? 'First run — set up the super-admin account that manages companies and users.'
+                  : 'Welcome back. Enter your credentials.'}
               </p>
-            )}
-          </form>
-        )}
+
+              {isBootstrap && (
+                <label className="block mb-4">
+                  <span className={label} style={{ color: 'var(--text-3)' }}>Full name</span>
+                  <input value={name} onChange={e => setName(e.target.value)} required autoComplete="name"
+                    placeholder="Wayne Cichanski" className="dark-input" />
+                </label>
+              )}
+
+              <label className="block mb-4">
+                <span className={label} style={{ color: 'var(--text-3)' }}>Email</span>
+                <input type="email" value={email} onChange={e => setEmail(e.target.value)} required autoComplete="email"
+                  placeholder="you@company.com" className="dark-input" />
+              </label>
+
+              <label className="block">
+                <span className={label} style={{ color: 'var(--text-3)' }}>Password</span>
+                <input type="password" value={password} onChange={e => setPassword(e.target.value)} required
+                  autoComplete={isBootstrap ? 'new-password' : 'current-password'}
+                  placeholder={isBootstrap ? 'At least 8 characters' : '••••••••••'} className="dark-input" />
+              </label>
+
+              {error && (
+                <div className="mt-4 text-[13px] rounded-lg px-3 py-2"
+                  style={{ color: 'var(--red)', background: 'rgba(220,38,38,0.08)', border: '1px solid rgba(220,38,38,0.25)' }}>
+                  {error}
+                </div>
+              )}
+
+              <button type="submit" disabled={busy} className="btn-primary w-full mt-6 font-semibold py-3">
+                {busy ? 'Please wait…' : isBootstrap ? 'Create account →' : 'Sign in →'}
+              </button>
+
+              {!isBootstrap && (
+                <p className="text-[11px] mt-5" style={{ color: 'var(--text-3)' }}>
+                  Accounts are created by an administrator — there is no open sign-up.
+                </p>
+              )}
+            </form>
+          )}
+        </div>
       </div>
     </div>
   );
